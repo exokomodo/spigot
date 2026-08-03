@@ -161,19 +161,18 @@ no containers, no process manager.
 
 - Debian/Ubuntu with systemd
 - `nginx`
+- `python3-certbot-nginx`
 - `git`, `make`, and a C toolchain (`build-essential`, `python3`) for the
   `sqlite3` native binding
-- `nvm`, or the Node version from [.nvmrc](.nvmrc) installed system-wide
+- `nvm`, or the Node version from [.nvmrc](.nvmrc) installed system-wide. A
+  non-interactive SSH shell never sources `nvm.sh`, so the `Makefile` looks
+  under `$NVM_DIR/versions/node` when `node` is off `PATH` and pins the
+  absolute path it finds into the systemd unit.
 - A deploy user with `NOPASSWD` sudo, so CD can write `/etc` and restart units
 
-Bootstrap once, as the deploy user:
-
-```sh
-sudo install -d -o "$USER" /srv/spigot
-git clone https://github.com/exokomodo/spigot.git /srv/spigot
-cd /srv/spigot
-make deploy/doctor   # names anything still missing, and how to fix it
-```
+Nothing else needs setting up by hand — the deploy clones the repo and installs
+the Node version itself. To see what a host is still missing before deploying
+to it, run `make deploy/doctor`; every failing check prints its own fix.
 
 ### Configuration files
 
@@ -198,10 +197,19 @@ never overwrite it.
 make deploy
 ```
 
-Run on the server, it checks prerequisites, fast-forwards the checkout to
-`origin/main`, runs `npm ci && npm run build`, installs both config files,
-reloads nginx, and restarts `spigot.service` — failing loudly with the last 50
-journal lines if the service does not come back up.
+Run on the server, in order:
+
+1. **Sync** — clones the repo if `$(DEPLOY_DIR)` has no checkout, otherwise
+   fetches and hard-resets it to `origin/main`.
+2. **Node** — sources `nvm.sh` and runs `nvm install && nvm use`, so the
+   version in [.nvmrc](.nvmrc) is present before anything needs it.
+3. **Re-exec** — `make` re-invokes itself in the deploy directory, so the rest
+   of the run uses the Makefile that was just pulled and re-resolves the Node
+   path that step 2 may have just created.
+4. **Check** — `deploy/doctor`, now against the synced tree and installed Node.
+5. **Release** — `npm ci && npm run build`, install both config files, reload
+   nginx, restart `spigot.service`, then confirm the unit is actually active,
+   dumping the last 50 journal lines and failing if it is not.
 
 Useful overrides:
 
