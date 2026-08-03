@@ -1,0 +1,21 @@
+# Dependencies
+node_modules/
+
+# Build
+build/
+dist/
+tmp/
+
+# TypeScript
+*.tsbuildinfo
+
+# Environment
+.env
+*.env.local
+
+# Editor
+.DS_Store
+*.log
+.vscode/
+*.swp
+*.swo
