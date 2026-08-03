@@ -20,6 +20,21 @@ JS_INSTALL ?= install
 MAIN ?= ./src/main.ts
 EXE ?= ./build/main.js
 
+NODE_VERSION := $(shell cat .nvmrc 2>/dev/null)
+NVM_DIR ?= $(HOME)/.nvm
+
+# A non-interactive SSH shell never sources nvm.sh, so `node` is off PATH even
+# when nvm installed it. Fall back to the nvm directory: the version in .nvmrc
+# first, then the newest one present.
+NODE_BIN ?= $(shell \
+	command -v node 2>/dev/null \
+	|| ls -1 $(NVM_DIR)/versions/node/v$(NODE_VERSION)*/bin/node 2>/dev/null | sort -V | tail -1 \
+	|| true)
+
+ifneq (,$(NODE_BIN))
+export PATH := $(patsubst %/,%,$(dir $(NODE_BIN))):$(PATH)
+endif
+
 ##@ Development Environment
 
 .PHONY: setup
@@ -147,7 +162,6 @@ DEPLOY_USER ?= $(shell id -un)
 SERVER_NAME ?= _
 APP_HOST ?= 127.0.0.1
 APP_PORT ?= 3000
-NODE_BIN ?= $(shell command -v node 2>/dev/null)
 STATE_DIR ?= /var/lib/$(SERVICE_NAME)
 SUDO ?= sudo
 NGINX_AVAILABLE_DIR ?= /etc/nginx/sites-available
@@ -243,9 +257,9 @@ deploy/doctor: ## Check that this host can be deployed to
 	check "git checkout" "git -C $(DEPLOY_DIR) rev-parse --git-dir" \
 		"clone the repo to $(DEPLOY_DIR) first"
 	check "node found ($(NODE_BIN))" "[ -x '$(NODE_BIN)' ]" \
-		"install Node.js (see .nvmrc), or pass NODE_BIN=/path/to/node"
+		"run 'make setup/js' to install Node $(NODE_VERSION) via nvm, or pass NODE_BIN=/path/to/node"
 	check "npm found" "command -v $(JS_EXEC)" \
-		"install Node.js, which ships $(JS_EXEC)"
+		"run 'make setup/js'; $(JS_EXEC) ships with Node"
 	check "systemd available" "command -v systemctl" \
 		"this deployment needs a systemd host"
 	check "nginx installed" "command -v nginx" \
