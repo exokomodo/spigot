@@ -38,11 +38,15 @@ you put there applies to `make run`, `make test`, and friends.
 All configuration is read from the environment in
 [src/lib/config.ts](src/lib/config.ts):
 
-| Variable             | Default           | Purpose                   |
-| -------------------- | ----------------- | ------------------------- |
-| `PORT`               | `3000`            | Port the server binds to  |
-| `NODE_ENV`           | `development`     | Environment name          |
-| `DATABASE_FILE_PATH` | `database.sqlite` | SQLite file, made on boot |
+| Variable             | Default           | Purpose                    |
+| -------------------- | ----------------- | -------------------------- |
+| `HOST`               | `0.0.0.0`         | Interface the server binds |
+| `PORT`               | `3000`            | Port the server binds to   |
+| `NODE_ENV`           | `development`     | Environment name           |
+| `DATABASE_FILE_PATH` | `database.sqlite` | SQLite file, made on boot  |
+
+In production the systemd unit sets `HOST=127.0.0.1`, so the app is reachable
+only through nginx and never directly from the internet.
 
 `.env` and `*.sqlite` are both gitignored, so your local database and secrets
 stay out of commits.
@@ -57,7 +61,7 @@ Runs [src/main.ts](src/main.ts) directly through `tsx` — no build step, no
 separate compile process. The server logs its URL on boot:
 
 ```text
-Server is running on http://localhost:3000
+Server is running on http://0.0.0.0:3000
 ```
 
 Verify it with `curl localhost:3000`, which hits the route defined in
@@ -146,3 +150,84 @@ Two workflows run on pull requests to `main`:
 
 Running `make fix && make check && make test` locally covers everything both
 workflows do.
+
+## Deployment
+
+One Linux box runs two things: systemd supervises the Node process on
+`127.0.0.1:3000`, and nginx serves port 80 and proxies to it. Nothing else —
+no containers, no process manager.
+
+### Server prerequisites
+
+- Debian/Ubuntu with systemd
+- `nginx`
+- `git`, `make`, and a C toolchain (`build-essential`, `python3`) for the
+  `sqlite3` native binding
+- `nvm`, or the Node version from [.nvmrc](.nvmrc) installed system-wide
+- A deploy user with `NOPASSWD` sudo, so CD can write `/etc` and restart units
+
+Bootstrap once, as the deploy user:
+
+```sh
+sudo install -d -o "$USER" /srv/spigot
+git clone https://github.com/exokomodo/spigot.git /srv/spigot
+cd /srv/spigot
+make deploy/doctor   # names anything still missing, and how to fix it
+```
+
+### Configuration files
+
+Both live in [etc/](etc/) and are templates — `@PLACEHOLDER@` tokens are
+substituted from the `Makefile` variables at install time, so the port and
+server name have exactly one source of truth.
+
+- [etc/nginx/spigot.conf](etc/nginx/spigot.conf) →
+  `/etc/nginx/sites-available/spigot.conf`, symlinked into `sites-enabled/`
+  (the stock `default` site is removed, since it also claims port 80)
+- [etc/systemd/spigot.service](etc/systemd/spigot.service) →
+  `/etc/systemd/system/spigot.service`
+- [etc/systemd/spigot.env.example](etc/systemd/spigot.env.example) →
+  `/etc/spigot/spigot.env`, only if that file does not exist yet
+
+`/etc/spigot/spigot.env` is for host-specific overrides and secrets. Deploys
+never overwrite it.
+
+### Deploying
+
+```sh
+make deploy
+```
+
+Run on the server, it checks prerequisites, fast-forwards the checkout to
+`origin/main`, runs `npm ci && npm run build`, installs both config files,
+reloads nginx, and restarts `spigot.service` — failing loudly with the last 50
+journal lines if the service does not come back up.
+
+Useful overrides:
+
+```sh
+make deploy SERVER_NAME=spigot.example.com APP_PORT=3000
+make deploy/release   # rebuild and reinstall without pulling
+make deploy/status    # unit status plus recent logs
+make deploy/logs      # journalctl -f
+```
+
+### Continuous deployment
+
+[cd.yml](.github/workflows/cd.yml) runs on every push to `main`: it loads the
+deploy key, then SSHes in and runs `make deploy`. All of the deploy logic lives
+in the `Makefile`, so it behaves identically by hand.
+
+Repository secrets: `SSH_PRIVATE_KEY`, `SSH_USER`, `SSH_HOST`, and
+`SSH_KNOWN_HOSTS` (the output of `ssh-keyscan <host>`; without it the workflow
+falls back to trusting whatever key the host presents).
+Repository variables: `DEPLOY_DIR` (default `/srv/spigot`), `SERVER_NAME`,
+`APP_PORT`.
+
+### TLS
+
+The site ships with `server_name _` on port 80 only. Once DNS points at the
+box, set the `SERVER_NAME` variable, deploy, and run
+`sudo certbot --nginx -d spigot.example.com`. Certbot edits the installed copy;
+the next deploy overwrites it, so fold the TLS block back into
+[etc/nginx/spigot.conf](etc/nginx/spigot.conf) when you set it up.

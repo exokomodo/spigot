@@ -1,0 +1,44 @@
+# Spigot application service.
+#
+# Installed by `make deploy/systemd` to /etc/systemd/system/spigot.service. The
+# @PLACEHOLDER@ tokens are substituted at install time from the Makefile's
+# deployment variables.
+
+[Unit]
+Description=Spigot web server
+Documentation=https://github.com/exokomodo/spigot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@DEPLOY_USER@
+WorkingDirectory=@DEPLOY_DIR@
+ExecStart=@NODE_BIN@ @DEPLOY_DIR@/build/main.js
+
+Environment=NODE_ENV=production
+Environment=HOST=@APP_HOST@
+Environment=PORT=@APP_PORT@
+Environment=DATABASE_FILE_PATH=@STATE_DIR@/database.sqlite
+# Optional overrides and secrets; missing file is not an error.
+EnvironmentFile=-/etc/spigot/spigot.env
+
+Restart=on-failure
+RestartSec=5s
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=spigot
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+# read-only rather than true, so a checkout under /home stays readable.
+ProtectHome=read-only
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+ReadWritePaths=@STATE_DIR@
+
+[Install]
+WantedBy=multi-user.target

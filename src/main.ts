@@ -23,8 +23,8 @@ async function main() {
     registerController(app, controller);
   }
 
-  app.listen(config.port, () => {
-    console.log(`Server is running on http://localhost:${config.port}`);
+  app.listen(config.port, config.host, () => {
+    console.log(`Server is running on http://${config.host}:${config.port}`);
   });
 }
 
