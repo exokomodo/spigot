@@ -5,6 +5,7 @@ import Dependencies from "./lib/dependencies.js";
 import { registerController } from "./lib/rest/controller.js";
 import { fromExpressApp } from "./lib/rest/application.js";
 import IndexController from "./controllers/index.js";
+import FeedsController from "./controllers/feeds.js";
 
 async function main() {
   const config = loadConfig();
@@ -19,7 +20,7 @@ async function main() {
     next();
   });
 
-  for (const controller of [IndexController]) {
+  for (const controller of [IndexController, FeedsController]) {
     registerController(app, controller);
   }
 
