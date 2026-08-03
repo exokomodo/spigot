@@ -96,12 +96,15 @@ describe("FeedsController", () => {
     expect(response.body).toContain("<pubDate>Thu, 15 Jan 2026 08:30:05 GMT</pubDate>");
   });
 
-  it("serves the same feed without the extension", async () => {
+  it("serves the browsable page, not RSS, without the extension", async () => {
     const { port, db } = await boot();
     await seed(db, "tech");
     const response = await request(port, "/feeds/tech");
     expect(response.status).toBe(200);
-    expect(response.body).toContain("<title>Tech Weekly</title>");
+    expect(response.contentType).toContain("text/html");
+    // The page, not the feed: a person gets HTML, a reader asks for .xml.
+    expect(response.body).toContain("<!doctype html>");
+    expect(response.body).not.toContain("<rss");
   });
 
   it("does not leak the .xml suffix into the slug", async () => {
@@ -140,5 +143,78 @@ describe("FeedsController", () => {
     expect(response.status).toBe(200);
     expect(response.body).toContain("<title>Empty</title>");
     expect(response.body).not.toContain("<item>");
+  });
+});
+
+describe("the feed page", () => {
+  it("lists the feed's entries", async () => {
+    const { port, db } = await boot();
+    await seed(db, "tech");
+    const response = await request(port, "/feeds/tech");
+    expect(response.status).toBe(200);
+    expect(response.body).toContain("Shipping &amp; Scaling");
+    expect(response.body).toContain('href="https://example.test/1"');
+    expect(response.body).toContain("/feeds/tech.xml");
+  });
+
+  it("renders an entry body as text rather than markup", async () => {
+    const { port, db } = await boot();
+    await seed(db, "tech");
+    const response = await request(port, "/feeds/tech");
+    // The seeded description is "<p>Notes</p>".
+    expect(response.body).toContain("&lt;p&gt;Notes&lt;/p&gt;");
+    expect(response.body).not.toContain("<p>Notes</p>");
+  });
+
+  it("answers an unknown slug with a 404 page", async () => {
+    const { port } = await boot();
+    const response = await request(port, "/feeds/nope");
+    expect(response.status).toBe(404);
+    expect(response.contentType).toContain("text/html");
+    expect(response.body).toContain("Not found");
+  });
+
+  it("shows an empty state for a feed with no entries", async () => {
+    const { port, db } = await boot();
+    await db.instance.run("INSERT INTO feeds (slug, title) VALUES (?, ?)", ["empty", "Empty"]);
+    const response = await request(port, "/feeds/empty");
+    expect(response.status).toBe(200);
+    expect(response.body).toContain("No entries yet");
+    expect(response.body).toContain("/api/feeds/empty/entries");
+  });
+
+  /*
+   * The second line of defence. Validation stops this arriving through the API,
+   * so the row is inserted directly — which is exactly how one could arrive in
+   * production: a fixture, an import, a migration.
+   */
+  it("does not link an entry whose stored URL is a javascript: URL", async () => {
+    const { port, db } = await boot();
+    const feed = await db.instance.run("INSERT INTO feeds (slug, title) VALUES (?, ?)", [
+      "tech",
+      "Tech",
+    ]);
+    await db.instance.run("INSERT INTO entries (feed_id, guid, url, title) VALUES (?, ?, ?, ?)", [
+      feed.lastID,
+      "g",
+      "javascript:alert(1)",
+      "Dangerous",
+    ]);
+    const response = await request(port, "/feeds/tech");
+    expect(response.status).toBe(200);
+    expect(response.body).toContain("Dangerous");
+    expect(response.body).not.toContain('href="javascript:');
+    expect(response.body).not.toContain("javascript:alert(1)");
+  });
+
+  it("escapes a script payload in a feed title", async () => {
+    const { port, db } = await boot();
+    await db.instance.run("INSERT INTO feeds (slug, title) VALUES (?, ?)", [
+      "x",
+      "<script>alert(1)</script>",
+    ]);
+    const response = await request(port, "/feeds/x");
+    expect(response.body).not.toContain("<script>alert(1)</script>");
+    expect(response.body).toContain("&lt;script&gt;");
   });
 });

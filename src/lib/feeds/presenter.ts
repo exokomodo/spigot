@@ -1,4 +1,4 @@
-import { FeedRow, FeedSummaryRow } from "./repository.js";
+import { EntryRow, FeedRow, FeedSummaryRow } from "./repository.js";
 
 /**
  * The JSON representation of a feed.
@@ -21,9 +21,38 @@ export interface FeedJson {
   readonly updatedAt: string;
 }
 
-/** Path a feed is served from, relative to the site root. */
+/** Path a feed's RSS is served from, relative to the site root. */
 export function feedPath(slug: string): string {
   return `/feeds/${slug}.xml`;
+}
+
+/** Path a feed's browsable page is served from. */
+export function feedPagePath(slug: string): string {
+  return `/feeds/${slug}`;
+}
+
+/**
+ * The JSON representation of an entry. Same reasoning as {@link FeedJson}:
+ * camelCase, nulls omitted rather than sent, decoupled from the column names.
+ */
+export interface EntryJson {
+  readonly id: number;
+  readonly feedId: number;
+  readonly guid: string;
+  readonly guidIsPermalink: boolean;
+  readonly url: string;
+  readonly title: string;
+  readonly description?: string;
+  readonly author?: string;
+  readonly categories?: string;
+  readonly enclosure?: {
+    readonly url: string;
+    readonly type: string;
+    readonly length: number;
+  };
+  readonly publishedAt?: string;
+  readonly createdAt: string;
+  readonly updatedAt: string;
 }
 
 function omitNull<T>(value: T | null): T | undefined {
@@ -47,4 +76,26 @@ export function toFeedJson(row: FeedRow, entryCount?: number): FeedJson {
 
 export function toFeedSummaryJson(row: FeedSummaryRow): FeedJson {
   return toFeedJson(row, row.entry_count);
+}
+
+export function toEntryJson(row: EntryRow): EntryJson {
+  const enclosure =
+    row.enclosure_url === null || row.enclosure_type === null || row.enclosure_length === null
+      ? undefined
+      : { url: row.enclosure_url, type: row.enclosure_type, length: row.enclosure_length };
+  return {
+    id: row.id,
+    feedId: row.feed_id,
+    guid: row.guid,
+    guidIsPermalink: row.guid_is_permalink === 1,
+    url: row.url,
+    title: row.title,
+    description: omitNull(row.description),
+    author: omitNull(row.author),
+    categories: omitNull(row.categories),
+    enclosure,
+    publishedAt: omitNull(row.published_at),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
 }

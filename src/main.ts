@@ -6,6 +6,7 @@ import Dependencies from "./lib/dependencies.js";
 import { PUBLIC_DIRECTORY } from "./lib/html/template.js";
 import { registerController } from "./lib/rest/controller.js";
 import { fromExpressApp } from "./lib/rest/application.js";
+import ApiEntriesController from "./controllers/api/entries.js";
 import ApiFeedsController from "./controllers/api/feeds.js";
 import FeedsController from "./controllers/feeds.js";
 import PagesController from "./controllers/pages.js";
@@ -24,7 +25,12 @@ async function main() {
   app.use(express.urlencoded({ extended: false }));
   app.use("/vendor", express.static(path.join(PUBLIC_DIRECTORY, "vendor")));
 
-  for (const controller of [ApiFeedsController, PagesController, FeedsController]) {
+  for (const controller of [
+    ApiFeedsController,
+    ApiEntriesController,
+    PagesController,
+    FeedsController,
+  ]) {
     registerController(app, controller);
   }
 
