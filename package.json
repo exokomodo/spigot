@@ -16,11 +16,11 @@
     "lint:eslint": "eslint src",
     "lint:types": "tsc --noEmit",
     "lint:prettier": "prettier --check .",
-    "lint:md": "markdownlint-cli2 \"**/*.md\" \"!node_modules/**\"",
+    "lint:md": "markdownlint-cli2 \"**/*.md\" \"!**/node_modules/**\" \"!.claude/**\"",
     "lint": "concurrently -m1 npm:lint:*",
     "fix:eslint": "eslint src --fix",
     "fix:prettier": "prettier --write .",
-    "fix:md": "markdownlint-cli2 --fix \"**/*.md\" \"!node_modules/**\"",
+    "fix:md": "markdownlint-cli2 --fix \"**/*.md\" \"!**/node_modules/**\" \"!.claude/**\"",
     "fix": "concurrently -m1 npm:fix:*"
   },
   "devDependencies": {
