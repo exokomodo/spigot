@@ -2,13 +2,13 @@ import { afterEach, describe, expect, it } from "vitest";
 import Database, { loadDatabase } from "../database.js";
 import { DuplicateSlugError } from "./repository.js";
 import {
-  SLUG_MAX_LENGTH,
   TITLE_MAX_LENGTH,
   ValidationError,
   createFeedFromRequest,
   listFeeds,
   parseNewFeed,
 } from "./service.js";
+import { SLUG_MAX_LENGTH } from "./slug.js";
 
 const databases: Database[] = [];
 
@@ -47,20 +47,20 @@ describe("parseNewFeed", () => {
     "vbscript:msgbox(1)",
     "/relative/path",
   ])("rejects %j as a feed link", (link) => {
-    expect(() => parseNewFeed({ slug: "tech", title: "Tech", link })).toThrow(ValidationError);
+    expect(() => parseNewFeed({ title: "Tech", link })).toThrow(ValidationError);
   });
 
   it("accepts an http and an https link", () => {
-    expect(
-      parseNewFeed({ slug: "tech", title: "Tech", link: "https://tech.example/" })
-    ).toMatchObject({ link: "https://tech.example/" });
-    expect(
-      parseNewFeed({ slug: "tech", title: "Tech", link: "http://tech.example/" })
-    ).toMatchObject({ link: "http://tech.example/" });
+    expect(parseNewFeed({ title: "Tech", link: "https://tech.example/" })).toMatchObject({
+      link: "https://tech.example/",
+    });
+    expect(parseNewFeed({ title: "Tech", link: "http://tech.example/" })).toMatchObject({
+      link: "http://tech.example/",
+    });
   });
 
   it("accepts a minimal valid body", () => {
-    expect(parseNewFeed({ slug: "tech", title: "Tech" })).toMatchObject({
+    expect(parseNewFeed({ title: "Tech" })).toMatchObject({
       slug: "tech",
       title: "Tech",
       description: "",
@@ -68,79 +68,69 @@ describe("parseNewFeed", () => {
   });
 
   it("trims surrounding whitespace", () => {
-    expect(parseNewFeed({ slug: "  tech  ", title: "  Tech  " })).toMatchObject({
-      slug: "tech",
-      title: "Tech",
-    });
+    expect(parseNewFeed({ title: "  Tech  " })).toMatchObject({ slug: "tech", title: "Tech" });
   });
 
-  it("requires a slug", () => {
-    expect(fieldsRejectedFor({ title: "Tech" })).toContain("slug");
-    expect(fieldsRejectedFor({ slug: "   ", title: "Tech" })).toContain("slug");
+  it("derives the slug from the title", () => {
+    expect(parseNewFeed({ title: "Tech Weekly" }).slug).toBe("tech-weekly");
+    expect(parseNewFeed({ title: "Tech Weekly — 2024!" }).slug).toBe("tech-weekly-2024");
+  });
+
+  it("ignores a slug in the body, since the title is the only name a feed has", () => {
+    expect(parseNewFeed({ slug: "something-else", title: "Tech Weekly" }).slug).toBe("tech-weekly");
+    // Even a slug that would have been valid on its own does not get through.
+    expect(parseNewFeed({ slug: "tech", title: "Tech Weekly" }).slug).toBe("tech-weekly");
   });
 
   it("requires a title", () => {
-    expect(fieldsRejectedFor({ slug: "tech" })).toContain("title");
-    expect(fieldsRejectedFor({ slug: "tech", title: "  " })).toContain("title");
+    expect(fieldsRejectedFor({})).toContain("title");
+    expect(fieldsRejectedFor({ title: "  " })).toContain("title");
   });
 
-  it("reports every invalid field at once rather than the first", () => {
-    expect(fieldsRejectedFor({})).toEqual(["slug", "title"]);
-  });
-
-  it("accepts lowercase alphanumerics in hyphen separated groups", () => {
-    for (const slug of ["tech", "tech-weekly", "a1", "a-1-b"]) {
-      expect(parseNewFeed({ slug, title: "T" }).slug).toBe(slug);
+  it.each(["!!!", "---", "🎧", "   ?   "])(
+    "rejects %j, a title no slug can be built from",
+    (title) => {
+      expect(fieldsRejectedFor({ title })).toEqual(["title"]);
     }
-  });
+  );
 
-  it.each([
-    ["Tech", "uppercase"],
-    ["tech weekly", "a space"],
-    ["tech_weekly", "an underscore"],
-    ["-tech", "a leading hyphen"],
-    ["tech-", "a trailing hyphen"],
-    ["tech--weekly", "a doubled hyphen"],
-    ["tech/../etc", "path traversal"],
-    ["tech.xml", "a dot"],
-    ["té", "a non-ascii letter"],
-    ["%2e%2e", "percent encoding"],
-  ])("rejects %j, which contains %s", (slug) => {
-    expect(fieldsRejectedFor({ slug, title: "T" })).toContain("slug");
-  });
-
-  it("rejects an over-long slug", () => {
-    expect(fieldsRejectedFor({ slug: "a".repeat(SLUG_MAX_LENGTH + 1), title: "T" })).toContain(
-      "slug"
-    );
+  it("says nothing about the slug, a field the caller was never asked for", () => {
+    expect(fieldsRejectedFor({ title: "!!!" })).not.toContain("slug");
   });
 
   it("rejects an over-long title", () => {
-    expect(fieldsRejectedFor({ slug: "ok", title: "a".repeat(TITLE_MAX_LENGTH + 1) })).toContain(
-      "title"
-    );
+    expect(fieldsRejectedFor({ title: "a".repeat(TITLE_MAX_LENGTH + 1) })).toContain("title");
+  });
+
+  it("caps a derived slug at the column's length", () => {
+    const feed = parseNewFeed({ title: "word ".repeat(40) });
+    expect(feed.slug.length).toBeLessThanOrEqual(SLUG_MAX_LENGTH);
   });
 
   it("ignores non-string values instead of coercing them", () => {
-    expect(fieldsRejectedFor({ slug: 42, title: { a: 1 } })).toEqual(["slug", "title"]);
+    expect(fieldsRejectedFor({ title: { a: 1 } })).toEqual(["title"]);
   });
 
   it("survives a body that is not an object at all", () => {
-    expect(fieldsRejectedFor(null)).toEqual(["slug", "title"]);
-    expect(fieldsRejectedFor("nope")).toEqual(["slug", "title"]);
-    expect(fieldsRejectedFor(undefined)).toEqual(["slug", "title"]);
+    expect(fieldsRejectedFor(null)).toEqual(["title"]);
+    expect(fieldsRejectedFor("nope")).toEqual(["title"]);
+    expect(fieldsRejectedFor(undefined)).toEqual(["title"]);
   });
 
   it("keeps a markup payload verbatim, since escaping belongs at render time", () => {
     // Sanitizing here would corrupt the stored title and still leave every
     // other render path unsafe; the escaping is the renderer's job.
-    expect(parseNewFeed({ slug: "x", title: "<script>alert(1)</script>" }).title).toBe(
+    expect(parseNewFeed({ title: "<script>alert(1)</script>" }).title).toBe(
       "<script>alert(1)</script>"
     );
   });
 
+  it("strips a markup payload out of the slug it derives from that title", () => {
+    expect(parseNewFeed({ title: "<script>alert(1)</script>" }).slug).toBe("script-alert-1-script");
+  });
+
   it("omits blank optional fields rather than storing empty strings", () => {
-    const feed = parseNewFeed({ slug: "x", title: "T", link: "   ", language: "" });
+    const feed = parseNewFeed({ title: "T", link: "   ", language: "" });
     expect(feed.link).toBeUndefined();
     expect(feed.language).toBeUndefined();
   });
@@ -149,35 +139,35 @@ describe("parseNewFeed", () => {
 describe("createFeedFromRequest", () => {
   it("stores a feed and returns the row", async () => {
     const db = await open();
-    const created = await createFeedFromRequest(db, { slug: "tech", title: "Tech Weekly" });
-    expect(created).toMatchObject({ slug: "tech", title: "Tech Weekly", description: "" });
+    const created = await createFeedFromRequest(db, { title: "Tech Weekly" });
+    expect(created).toMatchObject({ slug: "tech-weekly", title: "Tech Weekly", description: "" });
     expect(created.id).toBeGreaterThan(0);
   });
 
-  it("rejects a duplicate slug with DuplicateSlugError", async () => {
+  it("rejects a second feed whose title derives the same slug", async () => {
     const db = await open();
-    await createFeedFromRequest(db, { slug: "tech", title: "First" });
-    await expect(createFeedFromRequest(db, { slug: "tech", title: "Second" })).rejects.toThrow(
+    await createFeedFromRequest(db, { title: "Tech Weekly" });
+    // Different titles, one address: the collision has to surface rather than
+    // silently hand the second feed a URL that already belongs to the first.
+    await expect(createFeedFromRequest(db, { title: "TECH  weekly!" })).rejects.toThrow(
       DuplicateSlugError
     );
   });
 
   it("does not store anything when validation fails", async () => {
     const db = await open();
-    await expect(createFeedFromRequest(db, { slug: "Bad Slug", title: "T" })).rejects.toThrow(
-      ValidationError
-    );
+    await expect(createFeedFromRequest(db, { title: "  " })).rejects.toThrow(ValidationError);
     expect(await listFeeds(db)).toHaveLength(0);
   });
 
-  it("treats a slug as data, not SQL", async () => {
+  it("treats a title as data, not SQL", async () => {
     const db = await open();
-    // Rejected by the pattern, but the point is the table is still there after.
-    await expect(
-      createFeedFromRequest(db, { slug: "x'); DROP TABLE feeds; --", title: "T" })
-    ).rejects.toThrow(ValidationError);
-    await createFeedFromRequest(db, { slug: "still-here", title: "T" });
-    expect(await listFeeds(db)).toHaveLength(1);
+    await createFeedFromRequest(db, { title: "x'); DROP TABLE feeds; --" });
+    await createFeedFromRequest(db, { title: "Still Here" });
+    expect((await listFeeds(db)).map((row) => row.slug)).toEqual([
+      "still-here",
+      "x-drop-table-feeds",
+    ]);
   });
 });
 
@@ -188,8 +178,8 @@ describe("listFeeds", () => {
 
   it("counts entries per feed, including feeds with none", async () => {
     const db = await open();
-    const tech = await createFeedFromRequest(db, { slug: "tech", title: "Tech" });
-    await createFeedFromRequest(db, { slug: "empty", title: "Empty" });
+    const tech = await createFeedFromRequest(db, { title: "Tech" });
+    await createFeedFromRequest(db, { title: "Empty" });
     for (const guid of ["a", "b", "c"]) {
       await db.instance.run("INSERT INTO entries (feed_id, guid, url, title) VALUES (?, ?, ?, ?)", [
         tech.id,
@@ -207,15 +197,15 @@ describe("listFeeds", () => {
 
   it("puts the newest feed first", async () => {
     const db = await open();
-    await createFeedFromRequest(db, { slug: "first", title: "First" });
-    await createFeedFromRequest(db, { slug: "second", title: "Second" });
+    await createFeedFromRequest(db, { title: "First" });
+    await createFeedFromRequest(db, { title: "Second" });
     expect((await listFeeds(db)).map((row) => row.slug)).toEqual(["second", "first"]);
   });
 
   it("counts entries for one feed without borrowing another's", async () => {
     const db = await open();
-    const a = await createFeedFromRequest(db, { slug: "a", title: "A" });
-    const b = await createFeedFromRequest(db, { slug: "b", title: "B" });
+    const a = await createFeedFromRequest(db, { title: "A" });
+    const b = await createFeedFromRequest(db, { title: "B" });
     await db.instance.run("INSERT INTO entries (feed_id, guid, url, title) VALUES (?, ?, ?, ?)", [
       a.id,
       "g",

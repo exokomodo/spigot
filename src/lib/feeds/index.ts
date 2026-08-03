@@ -21,11 +21,10 @@ export {
   findFeedWithEntries,
   listFeedSummaries,
 } from "./repository.js";
+export { SLUG_MAX_LENGTH, SLUG_PATTERN, toSlug } from "./slug.js";
 export type { ValidationIssue } from "./service.js";
 export {
   DESCRIPTION_MAX_LENGTH,
-  SLUG_MAX_LENGTH,
-  SLUG_PATTERN,
   TITLE_MAX_LENGTH,
   ValidationError,
   createFeedFromRequest,

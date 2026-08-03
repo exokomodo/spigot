@@ -67,8 +67,12 @@ export function createFeedFragmentHandler(req: Request<Dependencies>, res: expre
         return;
       }
       if (error instanceof DuplicateSlugError) {
+        // The conflict is on the derived slug, but the form only offered a
+        // title, so that is the field the reader can actually change.
         retargetToErrors(res, 409).send(
-          renderValidationErrors([{ field: "slug", message: "is already taken" }])
+          renderValidationErrors([
+            { field: "title", message: `is already taken by the feed at /feeds/${error.slug}` },
+          ])
         );
         return;
       }
