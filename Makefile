@@ -136,6 +136,132 @@ fix/ts: ## Fix TypeScript lint and format errors
 	fi
 	$(JS_EXEC) run fix
 
+##@ Deployment
+
+# These targets run *on the server*, over SSH from the CD workflow. Override any
+# of them on the command line, e.g. `make deploy SERVER_NAME=spigot.example.com`.
+SERVICE_NAME ?= spigot
+DEPLOY_BRANCH ?= main
+DEPLOY_DIR ?= $(CURDIR)
+DEPLOY_USER ?= $(shell id -un)
+SERVER_NAME ?= _
+APP_HOST ?= 127.0.0.1
+APP_PORT ?= 3000
+NODE_BIN ?= $(shell command -v node 2>/dev/null)
+STATE_DIR ?= /var/lib/$(SERVICE_NAME)
+SUDO ?= sudo
+NGINX_AVAILABLE_DIR ?= /etc/nginx/sites-available
+NGINX_ENABLED_DIR ?= /etc/nginx/sites-enabled
+SYSTEMD_DIR ?= /etc/systemd/system
+
+# Substitutes the @PLACEHOLDER@ tokens in the etc/ templates.
+RENDER = sed \
+	-e 's|@SERVICE_NAME@|$(SERVICE_NAME)|g' \
+	-e 's|@DEPLOY_DIR@|$(DEPLOY_DIR)|g' \
+	-e 's|@DEPLOY_USER@|$(DEPLOY_USER)|g' \
+	-e 's|@SERVER_NAME@|$(SERVER_NAME)|g' \
+	-e 's|@APP_HOST@|$(APP_HOST)|g' \
+	-e 's|@APP_PORT@|$(APP_PORT)|g' \
+	-e 's|@NODE_BIN@|$(NODE_BIN)|g' \
+	-e 's|@STATE_DIR@|$(STATE_DIR)|g'
+
+.PHONY: deploy
+deploy: deploy/doctor deploy/pull ## Deploy on this host: pull, build, install configs, restart services
+	# Re-invoked so the freshly pulled Makefile is the one that runs the release.
+	$(MAKE) deploy/release
+
+.PHONY: deploy/release
+deploy/release: deploy/build deploy/nginx deploy/systemd ## Build and install configs without pulling
+	echo "Deployed $(SERVICE_NAME) from $$(git rev-parse --short HEAD)"
+
+.PHONY: deploy/pull
+deploy/pull: ## Fast-forward the checkout to origin/$(DEPLOY_BRANCH)
+	git fetch --prune origin $(DEPLOY_BRANCH)
+	git checkout $(DEPLOY_BRANCH)
+	git reset --hard origin/$(DEPLOY_BRANCH)
+
+.PHONY: deploy/build
+deploy/build: ## Install exact dependencies and compile
+	$(JS_EXEC) ci
+	$(JS_EXEC) run build
+
+.PHONY: deploy/nginx
+deploy/nginx: ## Install the nginx site and reload nginx
+	rendered="$$(mktemp)"
+	trap 'rm -f "$$rendered"' EXIT
+	$(RENDER) ./etc/nginx/$(SERVICE_NAME).conf > "$$rendered"
+	$(SUDO) install -D -m 0644 "$$rendered" $(NGINX_AVAILABLE_DIR)/$(SERVICE_NAME).conf
+	$(SUDO) ln -sfn $(NGINX_AVAILABLE_DIR)/$(SERVICE_NAME).conf $(NGINX_ENABLED_DIR)/$(SERVICE_NAME).conf
+	# The stock default site also listens on :80 and would shadow this one.
+	$(SUDO) rm -f $(NGINX_ENABLED_DIR)/default
+	$(SUDO) nginx -t
+	$(SUDO) systemctl reload nginx
+
+.PHONY: deploy/systemd
+deploy/systemd: ## Install the systemd unit and restart the service
+	rendered="$$(mktemp)"
+	trap 'rm -f "$$rendered"' EXIT
+	$(RENDER) ./etc/systemd/$(SERVICE_NAME).service > "$$rendered"
+	$(SUDO) install -D -m 0644 "$$rendered" $(SYSTEMD_DIR)/$(SERVICE_NAME).service
+	$(SUDO) install -d -m 0755 -o $(DEPLOY_USER) $(STATE_DIR)
+	if ! [ -f /etc/$(SERVICE_NAME)/$(SERVICE_NAME).env ]; then \
+		$(SUDO) install -D -m 0640 -o $(DEPLOY_USER) \
+			./etc/systemd/$(SERVICE_NAME).env.example \
+			/etc/$(SERVICE_NAME)/$(SERVICE_NAME).env; \
+	fi
+	$(SUDO) systemctl daemon-reload
+	$(SUDO) systemctl enable $(SERVICE_NAME).service
+	$(SUDO) systemctl restart $(SERVICE_NAME).service
+	sleep 2
+	if ! $(SUDO) systemctl is-active --quiet $(SERVICE_NAME).service; then \
+		echo "Error: $(SERVICE_NAME).service failed to start. Recent logs:"; \
+		$(SUDO) journalctl -u $(SERVICE_NAME).service -n 50 --no-pager; \
+		exit 1; \
+	fi
+
+.PHONY: deploy/status
+deploy/status: ## Show service status and recent logs
+	$(SUDO) systemctl status --no-pager --full $(SERVICE_NAME).service || true
+	$(SUDO) journalctl -u $(SERVICE_NAME).service -n 50 --no-pager
+
+.PHONY: deploy/logs
+deploy/logs: ## Follow the service logs
+	$(SUDO) journalctl -u $(SERVICE_NAME).service -f
+
+.PHONY: deploy/doctor
+deploy/doctor: ## Check that this host can be deployed to
+	failed=0
+	check() { \
+		if eval "$$2" >/dev/null 2>&1; then \
+			echo "  ok    $$1"; \
+		else \
+			echo "  FAIL  $$1 -> $$3"; \
+			failed=1; \
+		fi; \
+	}
+	echo "Deploy target: $(DEPLOY_USER)@$$(hostname) $(DEPLOY_DIR) (branch $(DEPLOY_BRANCH))"
+	check "git checkout" "git -C $(DEPLOY_DIR) rev-parse --git-dir" \
+		"clone the repo to $(DEPLOY_DIR) first"
+	check "node found ($(NODE_BIN))" "[ -x '$(NODE_BIN)' ]" \
+		"install Node.js (see .nvmrc), or pass NODE_BIN=/path/to/node"
+	check "npm found" "command -v $(JS_EXEC)" \
+		"install Node.js, which ships $(JS_EXEC)"
+	check "systemd available" "command -v systemctl" \
+		"this deployment needs a systemd host"
+	check "nginx installed" "command -v nginx" \
+		"install nginx, e.g. 'sudo apt-get install -y nginx'"
+	check "passwordless sudo" "$(SUDO) -n true" \
+		"grant NOPASSWD sudo to $(DEPLOY_USER) so CD can run unattended"
+	check "unit template" "[ -f ./etc/systemd/$(SERVICE_NAME).service ]" \
+		"run make from the repo root"
+	check "nginx template" "[ -f ./etc/nginx/$(SERVICE_NAME).conf ]" \
+		"run make from the repo root"
+	if [ "$$failed" -ne 0 ]; then \
+		echo "Deploy prerequisites are missing; fix the FAIL lines above."; \
+		exit 1; \
+	fi
+	echo "Ready to deploy."
+
 ##@ Helpers
 
 .PHONY: help

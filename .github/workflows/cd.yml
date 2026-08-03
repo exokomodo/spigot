@@ -1,0 +1,42 @@
+name: Continuous Deployment
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  cd:
+    runs-on: ubuntu-latest
+
+    env:
+      SSH_USER: root
+      SSH_HOST: rss.poggers.lol
+      DEPLOY_DIR: /srv/spigot
+      SERVER_NAME: rss.poggers.lol
+      APP_PORT: 3000
+
+    steps:
+      - name: Set up SSH agent
+        uses: webfactory/ssh-agent@v0.10.0
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+      - name: Trust the deploy host
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts
+
+      - name: Deploy
+        run: |
+          ssh "$SSH_USER@$SSH_HOST" \
+            "cd '$DEPLOY_DIR' && make deploy DEPLOY_BRANCH=main SERVER_NAME='$SERVER_NAME' APP_PORT='$APP_PORT'"

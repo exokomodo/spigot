@@ -3,8 +3,21 @@ import { loadConfig } from "./config.js";
 
 describe("loadConfig", () => {
   afterEach(() => {
+    delete process.env.HOST;
     delete process.env.PORT;
     delete process.env.NODE_ENV;
+  });
+
+  it("returns default host when HOST is not set", () => {
+    delete process.env.HOST;
+    const config = loadConfig();
+    expect(config.host).toBe("0.0.0.0");
+  });
+
+  it("reads HOST from environment", () => {
+    process.env.HOST = "127.0.0.1";
+    const config = loadConfig();
+    expect(config.host).toBe("127.0.0.1");
   });
 
   it("returns default port when PORT is not set", () => {
