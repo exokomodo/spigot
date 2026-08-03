@@ -14,7 +14,7 @@ export function fromExpressApp<TDependencies, TKey extends string = DefaultDepen
   const application = app as Application<TDependencies, TKey>;
   Object.assign(application, { [key]: dependencies });
   application.use((req, _, next) => {
-    req = fromExpressRequest(req, dependencies, key);
+    fromExpressRequest(req, dependencies, key);
     next();
   });
   return application;
