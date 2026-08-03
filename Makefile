@@ -168,7 +168,14 @@ STATE_DIR ?= /var/lib/$(SERVICE_NAME)
 SUDO ?= sudo
 NGINX_AVAILABLE_DIR ?= /etc/nginx/sites-available
 NGINX_ENABLED_DIR ?= /etc/nginx/sites-enabled
+NGINX_SNIPPETS_DIR ?= /etc/nginx/snippets
 SYSTEMD_DIR ?= /etc/systemd/system
+
+# Certbot runs in `certonly --webroot` mode, so it only ever writes to
+# CERT_DIR and never edits the nginx config this repo owns.
+ACME_WEBROOT ?= /var/www/certbot
+CERT_DIR ?= /etc/letsencrypt/live/$(SERVER_NAME)
+CERTBOT_EMAIL ?=
 
 # Substitutes the @PLACEHOLDER@ tokens in the etc/ templates.
 RENDER = sed \
@@ -179,7 +186,9 @@ RENDER = sed \
 	-e 's|@APP_HOST@|$(APP_HOST)|g' \
 	-e 's|@APP_PORT@|$(APP_PORT)|g' \
 	-e 's|@NODE_BIN@|$(NODE_BIN)|g' \
-	-e 's|@STATE_DIR@|$(STATE_DIR)|g'
+	-e 's|@STATE_DIR@|$(STATE_DIR)|g' \
+	-e 's|@ACME_WEBROOT@|$(ACME_WEBROOT)|g' \
+	-e 's|@CERT_DIR@|$(CERT_DIR)|g'
 
 .PHONY: deploy
 deploy: deploy/pull deploy/node ## Deploy on this host: sync, install Node, check, build, restart
@@ -228,15 +237,78 @@ deploy/build: ## Install exact dependencies and compile
 
 .PHONY: deploy/nginx
 deploy/nginx: ## Install the nginx site and reload nginx
-	rendered="$$(mktemp)"
-	trap 'rm -f "$$rendered"' EXIT
-	$(RENDER) ./etc/nginx/$(SERVICE_NAME).conf > "$$rendered"
-	$(SUDO) install -D -m 0644 "$$rendered" $(NGINX_AVAILABLE_DIR)/$(SERVICE_NAME).conf
-	$(SUDO) ln -sfn $(NGINX_AVAILABLE_DIR)/$(SERVICE_NAME).conf $(NGINX_ENABLED_DIR)/$(SERVICE_NAME).conf
+	site=$(NGINX_AVAILABLE_DIR)/$(SERVICE_NAME).conf
+	snippet=$(NGINX_SNIPPETS_DIR)/$(SERVICE_NAME)-proxy.conf
+	staged="$$(mktemp)"
+	backup="$$(mktemp -d)"
+	trap 'rm -rf "$$staged" "$$backup"' EXIT
+	# A failed `nginx -t` must not leave a broken config behind, or the next
+	# unrelated reload breaks the site.
+	for installed in "$$site" "$$snippet"; do
+		if [ -f "$$installed" ]; then cp "$$installed" "$$backup/$$(basename "$$installed")"; fi
+	done
+	# Serve the HTTPS config only once a certificate actually exists, otherwise
+	# nginx -t fails on the missing ssl_certificate and takes the deploy with it.
+	if [ -f $(CERT_DIR)/fullchain.pem ]; then
+		source=./etc/nginx/$(SERVICE_NAME)-tls.conf
+		echo "nginx: HTTPS ($(CERT_DIR))"
+	else
+		source=./etc/nginx/$(SERVICE_NAME).conf
+		echo "nginx: HTTP only; run 'make deploy/tls' to issue a certificate"
+	fi
+	$(SUDO) install -d -m 0755 $(ACME_WEBROOT)
+	$(RENDER) ./etc/nginx/snippets/$(SERVICE_NAME)-proxy.conf > "$$staged"
+	$(SUDO) install -D -m 0644 "$$staged" "$$snippet"
+	$(RENDER) "$$source" > "$$staged"
+	$(SUDO) install -D -m 0644 "$$staged" "$$site"
+	$(SUDO) ln -sfn "$$site" $(NGINX_ENABLED_DIR)/$(SERVICE_NAME).conf
 	# The stock default site also listens on :80 and would shadow this one.
 	$(SUDO) rm -f $(NGINX_ENABLED_DIR)/default
-	$(SUDO) nginx -t
+	if ! $(SUDO) nginx -t; then
+		echo "nginx rejected the config; rolling back and leaving nginx untouched."
+		for installed in "$$site" "$$snippet"; do
+			previous="$$backup/$$(basename "$$installed")"
+			if [ -f "$$previous" ]; then
+				$(SUDO) install -m 0644 "$$previous" "$$installed"
+			else
+				$(SUDO) rm -f "$$installed" $(NGINX_ENABLED_DIR)/$(SERVICE_NAME).conf
+			fi
+		done
+		exit 1
+	fi
 	$(SUDO) systemctl reload nginx
+
+.PHONY: deploy/tls
+deploy/tls: ## Issue a Let's Encrypt certificate for $(SERVER_NAME), then switch to HTTPS
+	if [ "$(SERVER_NAME)" = "_" ]; then
+		echo "Error: SERVER_NAME is '_', which is not a real hostname."
+		echo "Re-run as: make deploy/tls SERVER_NAME=spigot.example.com CERTBOT_EMAIL=you@example.com"
+		exit 1
+	fi
+	if ! command -v certbot >/dev/null 2>&1; then
+		echo "Error: certbot is not installed."
+		echo "Run: $(SUDO) apt-get install -y certbot"
+		exit 1
+	fi
+	if [ -z "$(CERTBOT_EMAIL)" ]; then
+		echo "Error: CERTBOT_EMAIL is not set; Let's Encrypt needs it for expiry notices."
+		echo "Re-run as: make deploy/tls SERVER_NAME=$(SERVER_NAME) CERTBOT_EMAIL=you@example.com"
+		exit 1
+	fi
+	# The HTTP site must already be serving $(ACME_WEBROOT) for the challenge.
+	$(MAKE) deploy/nginx
+	# certonly, so certbot issues the certificate and never edits nginx config.
+	$(SUDO) certbot certonly \
+		--webroot \
+		--webroot-path $(ACME_WEBROOT) \
+		--domain $(SERVER_NAME) \
+		--email $(CERTBOT_EMAIL) \
+		--agree-tos \
+		--no-eff-email \
+		--keep-until-expiring \
+		--deploy-hook 'systemctl reload nginx'
+	# Now that the certificate exists, this installs the HTTPS config.
+	$(MAKE) deploy/nginx
 
 .PHONY: deploy/systemd
 deploy/systemd: ## Install the systemd unit and restart the service
@@ -297,6 +369,11 @@ deploy/doctor: ## Check that this host can be deployed to
 		"run make from the repo root"
 	check "nginx template" "[ -f ./etc/nginx/$(SERVICE_NAME).conf ]" \
 		"run make from the repo root"
+	if [ -f $(CERT_DIR)/fullchain.pem ]; then \
+		echo "  ok    TLS certificate for $(SERVER_NAME)"; \
+	else \
+		echo "  note  no certificate for $(SERVER_NAME); serving HTTP only (see 'make deploy/tls')"; \
+	fi
 	if [ "$$failed" -ne 0 ]; then \
 		echo "Deploy prerequisites are missing; fix the FAIL lines above."; \
 		exit 1; \
