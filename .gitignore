@@ -22,3 +22,8 @@ tmp/
 
 # Database
 *.sqlite
+
+# Claude Code agent worktrees. Scratch checkouts of this same repo, so a
+# `git add` from the root records them as submodule gitlinks. Only the
+# worktrees are ignored: settings under .claude/ are worth sharing.
+.claude/worktrees/
