@@ -1,0 +1,164 @@
+<style>
+  :root {
+    color-scheme: light dark;
+    --border: color-mix(in srgb, currentColor 18%, transparent);
+    --muted: color-mix(in srgb, currentColor 62%, transparent);
+  }
+  body {
+    margin: 0 auto;
+    padding: 2rem 1.25rem 4rem;
+    max-width: 52rem;
+    font:
+      16px/1.55 system-ui,
+      -apple-system,
+      Segoe UI,
+      sans-serif;
+  }
+  h1 {
+    margin: 0 0 0.25rem;
+    font-size: 1.5rem;
+  }
+  .tagline {
+    margin: 0 0 2rem;
+    color: var(--muted);
+  }
+  h2 {
+    font-size: 1rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--muted);
+    margin: 2rem 0 0.75rem;
+  }
+  form {
+    display: grid;
+    gap: 0.75rem;
+    grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+    align-items: end;
+  }
+  label {
+    display: grid;
+    gap: 0.3rem;
+    font-size: 0.85rem;
+    color: var(--muted);
+  }
+  input {
+    font: inherit;
+    padding: 0.5rem 0.6rem;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: transparent;
+    color: inherit;
+    min-width: 0;
+  }
+  button {
+    font: inherit;
+    padding: 0.55rem 1.1rem;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: color-mix(in srgb, currentColor 8%, transparent);
+    color: inherit;
+    cursor: pointer;
+  }
+  button:hover {
+    background: color-mix(in srgb, currentColor 14%, transparent);
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+  }
+  th,
+  td {
+    text-align: left;
+    padding: 0.6rem 0.5rem;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  th {
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--muted);
+  }
+  td.count {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+  .description {
+    display: block;
+    color: var(--muted);
+    font-size: 0.9rem;
+  }
+  .empty td {
+    color: var(--muted);
+    padding: 1.5rem 0.5rem;
+    text-align: center;
+  }
+  #errors:empty {
+    display: none;
+  }
+  #errors {
+    margin: 0.75rem 0 0;
+    padding: 0.7rem 0.9rem;
+    border: 1px solid var(--border);
+    border-left: 3px solid currentColor;
+    border-radius: 4px;
+    font-size: 0.9rem;
+  }
+  #errors ul {
+    margin: 0;
+    padding-left: 1.1rem;
+  }
+  .htmx-request button {
+    opacity: 0.6;
+    pointer-events: none;
+  }
+
+  /* Feed detail page */
+  .crumbs {
+    margin: 0 0 1.25rem;
+    font-size: 0.9rem;
+  }
+  .feed-meta {
+    margin: 0 0 0.5rem;
+    color: var(--muted);
+  }
+  .feed-meta code {
+    color: inherit;
+  }
+  ul.entries {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+  li.entry {
+    padding: 0.9rem 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .entry-title {
+    font-size: 1.05rem;
+  }
+  .entry-meta {
+    margin-top: 0.15rem;
+    font-size: 0.85rem;
+    color: var(--muted);
+  }
+  .entry-description {
+    margin: 0.4rem 0 0;
+    color: var(--muted);
+    font-size: 0.9rem;
+    overflow-wrap: anywhere;
+  }
+  li.empty {
+    padding: 1.5rem 0.5rem;
+    color: var(--muted);
+    text-align: center;
+  }
+  li.empty p {
+    margin: 0.25rem 0;
+  }
+  /* A URL whose scheme is not http(s) is shown as text rather than linked. */
+  .unsafe-link {
+    text-decoration: underline dotted;
+    cursor: help;
+  }
+</style>

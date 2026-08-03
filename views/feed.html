@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{{title}} — Spigot</title>
+    <link rel="alternate" type="application/rss+xml" title="{{title}}" href="{{feedUrl}}" />
+    <script src="/vendor/htmx.min.js" defer></script>
+    {{styles}}
+  </head>
+  <body>
+    <p class="crumbs"><a href="/">&larr; All feeds</a></p>
+
+    <h1>{{title}}</h1>
+    <p class="tagline">{{description}}</p>
+    <p class="feed-meta">
+      <code>{{slug}}</code> &middot; <a href="{{feedUrl}}">RSS</a> &middot; {{entryCount}} entries
+      {{siteLink}}
+    </p>
+
+    <h2>New entry</h2>
+    <form
+      hx-post="{{createPath}}"
+      hx-target="#entry-list"
+      hx-swap="innerHTML"
+      hx-disabled-elt="find button"
+      hx-on::after-request="if (event.detail.successful) this.reset()"
+    >
+      <label>
+        URL
+        <input name="url" type="url" placeholder="https://example.com/post" required />
+      </label>
+      <label>
+        Title
+        <input name="title" placeholder="Post title" required />
+      </label>
+      <label>
+        Published
+        <input name="publishedAt" placeholder="Optional, defaults to now" />
+      </label>
+      <label>
+        Description
+        <input name="description" placeholder="Optional" />
+      </label>
+      <button type="submit">Add entry</button>
+    </form>
+    <div id="errors" role="alert"></div>
+
+    <script>
+      // Same reasoning as the index page: the server answers a rejected form
+      // with a real 4xx, so opt those bodies back into swapping.
+      document.body.addEventListener("htmx:beforeSwap", function (event) {
+        const status = event.detail.xhr.status;
+        if (status === 400 || status === 404 || status === 409) {
+          event.detail.shouldSwap = true;
+          event.detail.isError = false;
+        }
+      });
+    </script>
+
+    <h2>Entries</h2>
+    <ul class="entries" id="entry-list">
+      {{entries}}
+    </ul>
+  </body>
+</html>

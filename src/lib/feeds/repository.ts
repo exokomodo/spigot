@@ -64,6 +64,28 @@ export interface NewFeed {
   readonly language?: string;
 }
 
+/**
+ * The columns a caller may set when creating an entry.
+ *
+ * `publishedAt` is required rather than optional: the service defaults it to
+ * now, and making that explicit here keeps the decision in one place instead of
+ * splitting it between this layer and the column default.
+ */
+export interface NewEntry {
+  readonly feedId: number;
+  readonly guid: string;
+  readonly guidIsPermalink: boolean;
+  readonly url: string;
+  readonly title: string;
+  readonly description?: string;
+  readonly author?: string;
+  readonly categories?: string;
+  readonly enclosureUrl?: string;
+  readonly enclosureType?: string;
+  readonly enclosureLength?: number;
+  readonly publishedAt: string;
+}
+
 /** How many entries a feed serves when the caller does not say otherwise. */
 export const DEFAULT_ENTRY_LIMIT = 50;
 
@@ -158,6 +180,81 @@ export async function createFeed(db: Database, feed: NewFeed): Promise<FeedRow> 
   ]);
   if (created === undefined) {
     throw new Error(`Feed ${String(inserted.lastID)} vanished immediately after being created`);
+  }
+  return created;
+}
+
+/** Raised when a guid is already used within the feed, so callers can answer 409. */
+export class DuplicateGuidError extends Error {
+  readonly guid: string;
+
+  constructor(guid: string) {
+    super(`An entry with the guid "${guid}" already exists in this feed`);
+    this.name = "DuplicateGuidError";
+    this.guid = guid;
+  }
+}
+
+/**
+ * True for the composite UNIQUE violation on `(feed_id, guid)`.
+ *
+ * SQLite names both columns in the message, so the pattern matches the pair
+ * rather than `guid` alone — a future single-column index on `guid` would mean
+ * something different and should not be reported as this.
+ */
+function isDuplicateGuidViolation(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    /UNIQUE constraint failed:\s*entries\.feed_id,\s*entries\.guid/i.test(error.message)
+  );
+}
+
+/**
+ * Inserts an entry and returns the stored row.
+ *
+ * As with feeds, the duplicate check is the INSERT rather than a SELECT
+ * beforehand: the UNIQUE index cannot be raced, a pre-check can.
+ *
+ * `published_at` is expected to already be a value SQLite can parse — migration
+ * 0002 constrains the column, so an unvalidated value would surface here as a
+ * CHECK violation and a 500. Validating it is the service's job, and
+ * {@link parseNewEntry} does it.
+ */
+export async function createEntry(db: Database, entry: NewEntry): Promise<EntryRow> {
+  const inserted = await db.instance
+    .run(
+      `INSERT INTO entries (
+         feed_id, guid, guid_is_permalink, url, title, description, author,
+         categories, enclosure_url, enclosure_type, enclosure_length, published_at
+       )
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        entry.feedId,
+        entry.guid,
+        entry.guidIsPermalink ? 1 : 0,
+        entry.url,
+        entry.title,
+        entry.description ?? null,
+        entry.author ?? null,
+        entry.categories ?? null,
+        entry.enclosureUrl ?? null,
+        entry.enclosureType ?? null,
+        entry.enclosureLength ?? null,
+        entry.publishedAt,
+      ]
+    )
+    .catch((error: unknown) => {
+      if (isDuplicateGuidViolation(error)) {
+        throw new DuplicateGuidError(entry.guid);
+      }
+      throw error;
+    });
+
+  const created = await db.instance.get<EntryRow>("SELECT * FROM entries WHERE id = ?", [
+    inserted.lastID,
+  ]);
+  if (created === undefined) {
+    throw new Error(`Entry ${String(inserted.lastID)} vanished immediately after being created`);
   }
   return created;
 }
