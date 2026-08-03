@@ -3,6 +3,10 @@ build/
 dist/
 *.lock
 
+# Agent worktrees are whole checkouts of this repo. Formatting them would reach
+# into another branch's files from this one.
+.claude/
+
 # Vendored third-party builds are kept byte-for-byte as published so their
 # checksums stay comparable against upstream. Formatting one would de-minify it
 # and silently change what ships.
