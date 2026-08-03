@@ -1,4 +1,5 @@
 import Database from "../database.js";
+import { SAFE_PROTOCOL_LIST, isSafeHttpUrl } from "../html/url.js";
 import {
   DuplicateSlugError,
   FeedRow,
@@ -101,7 +102,15 @@ export function parseNewFeed(body: unknown): NewFeed {
     });
   }
 
+  // A feed's link reaches an href on the index, so it needs the same scheme
+  // check an entry url gets. The render layer already refuses to link an unsafe
+  // one, but storing it is still wrong: the value also goes out as the RSS
+  // channel `<link>`, where a reader follows it under its own rules.
   const link = readString(fields.link)?.trim() ?? "";
+  if (link.length > 0 && !isSafeHttpUrl(link)) {
+    issues.push({ field: "link", message: `must be an absolute ${SAFE_PROTOCOL_LIST} URL` });
+  }
+
   const language = readString(fields.language)?.trim() ?? "";
 
   if (issues.length > 0) {

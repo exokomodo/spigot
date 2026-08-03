@@ -38,6 +38,27 @@ const fieldsRejectedFor = (body: unknown): readonly string[] => {
 };
 
 describe("parseNewFeed", () => {
+  it.each([
+    "javascript:alert(1)",
+    "JaVaScRiPt:alert(1)",
+    " \tjavascript:alert(1)",
+    "java\nscript:alert(1)",
+    "data:text/html,<script>alert(1)</script>",
+    "vbscript:msgbox(1)",
+    "/relative/path",
+  ])("rejects %j as a feed link", (link) => {
+    expect(() => parseNewFeed({ slug: "tech", title: "Tech", link })).toThrow(ValidationError);
+  });
+
+  it("accepts an http and an https link", () => {
+    expect(
+      parseNewFeed({ slug: "tech", title: "Tech", link: "https://tech.example/" })
+    ).toMatchObject({ link: "https://tech.example/" });
+    expect(
+      parseNewFeed({ slug: "tech", title: "Tech", link: "http://tech.example/" })
+    ).toMatchObject({ link: "http://tech.example/" });
+  });
+
   it("accepts a minimal valid body", () => {
     expect(parseNewFeed({ slug: "tech", title: "Tech" })).toMatchObject({
       slug: "tech",
