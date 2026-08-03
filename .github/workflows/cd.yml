@@ -17,6 +17,10 @@ jobs:
   cd:
     runs-on: ubuntu-latest
 
+    environment: 
+      name: prod
+      url: https://rss.poggers.lol
+
     env:
       SSH_USER: root
       SSH_HOST: rss.poggers.lol
