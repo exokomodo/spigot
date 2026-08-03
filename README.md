@@ -245,8 +245,36 @@ Repository variables: `DEPLOY_DIR` (default `/srv/spigot`), `SERVER_NAME`,
 
 ### TLS
 
-The site ships with `server_name _` on port 80 only. Once DNS points at the
-box, set the `SERVER_NAME` variable, deploy, and run
-`sudo certbot --nginx -d spigot.example.com`. Certbot edits the installed copy;
-the next deploy overwrites it, so fold the TLS block back into
-[etc/nginx/spigot.conf](etc/nginx/spigot.conf) when you set it up.
+This repo owns the nginx config; certbot owns only the certificate. That split
+is deliberate: `certbot --nginx` rewrites the installed site file, which the
+next deploy would overwrite and break TLS. So certbot runs in `certonly
+--webroot` mode instead, answering challenges from `/var/www/certbot` — which
+both site configs serve — and never touching nginx config at all.
+
+Once DNS points at the box:
+
+```sh
+make deploy/tls SERVER_NAME=spigot.example.com CERTBOT_EMAIL=you@example.com
+```
+
+That installs the HTTP config, issues the certificate, then reinstalls as
+HTTPS. Every later `make deploy` sees the certificate and keeps serving the
+TLS config, so the switch survives deploys with nothing further to do.
+
+Renewal is certbot's own systemd timer. The `--deploy-hook` registered at
+issuance reloads nginx after each renewal.
+
+**Migrating a certificate first issued with `certbot --nginx`:** the
+certificate itself is fine and gets picked up on the next deploy, but its
+renewal config still names the nginx authenticator and installer, so renewals
+would keep editing nginx. Certbot only rewrites that config when it actually
+issues, so force one reissue:
+
+```sh
+make deploy/tls SERVER_NAME=spigot.example.com CERTBOT_EMAIL=you@example.com \
+  CERTBOT_FORCE=1
+```
+
+Confirm with `sudo certbot certificates` and check that
+`/etc/letsencrypt/renewal/spigot.example.com.conf` now reads
+`authenticator = webroot` with no `installer = nginx`.
