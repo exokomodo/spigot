@@ -160,6 +160,7 @@ SERVICE_NAME ?= spigot
 DEPLOY_BRANCH ?= main
 DEPLOY_DIR ?= $(CURDIR)
 DEPLOY_USER ?= $(shell id -un)
+REPO_URL ?= $(shell git remote get-url origin 2>/dev/null || echo https://github.com/exokomodo/spigot.git)
 SERVER_NAME ?= _
 APP_HOST ?= 127.0.0.1
 APP_PORT ?= 3000
@@ -181,19 +182,44 @@ RENDER = sed \
 	-e 's|@STATE_DIR@|$(STATE_DIR)|g'
 
 .PHONY: deploy
-deploy: deploy/doctor deploy/pull ## Deploy on this host: pull, build, install configs, restart services
-	# Re-invoked so the freshly pulled Makefile is the one that runs the release.
-	$(MAKE) deploy/release
+deploy: deploy/pull deploy/node ## Deploy on this host: sync, install Node, check, build, restart
+	# Re-invoked in the deploy directory so the freshly pulled Makefile runs the
+	# release, and so NODE_BIN is re-resolved after nvm may have installed Node.
+	$(MAKE) -C $(DEPLOY_DIR) deploy/release
 
 .PHONY: deploy/release
-deploy/release: deploy/build deploy/nginx deploy/systemd ## Build and install configs without pulling
-	echo "Deployed $(SERVICE_NAME) from $$(git rev-parse --short HEAD)"
+deploy/release: deploy/doctor deploy/build deploy/nginx deploy/systemd ## Check, build, and install configs without syncing
+	echo "Deployed $(SERVICE_NAME) from $$(git -C $(DEPLOY_DIR) rev-parse --short HEAD)"
 
 .PHONY: deploy/pull
-deploy/pull: ## Fast-forward the checkout to origin/$(DEPLOY_BRANCH)
-	git fetch --prune origin $(DEPLOY_BRANCH)
-	git checkout $(DEPLOY_BRANCH)
-	git reset --hard origin/$(DEPLOY_BRANCH)
+deploy/pull: ## Clone the repo if missing, otherwise reset it to origin/$(DEPLOY_BRANCH)
+	if [ -d "$(DEPLOY_DIR)/.git" ]; then
+		git -C $(DEPLOY_DIR) fetch --prune origin $(DEPLOY_BRANCH)
+		git -C $(DEPLOY_DIR) checkout $(DEPLOY_BRANCH)
+		git -C $(DEPLOY_DIR) reset --hard origin/$(DEPLOY_BRANCH)
+	else
+		echo "No checkout at $(DEPLOY_DIR); cloning $(REPO_URL)"
+		# Only escalate when the parent directory is not already writable.
+		mkdir -p $(DEPLOY_DIR) 2>/dev/null || $(SUDO) install -d -o $(DEPLOY_USER) $(DEPLOY_DIR)
+		git clone --branch $(DEPLOY_BRANCH) $(REPO_URL) $(DEPLOY_DIR)
+	fi
+
+.PHONY: deploy/node
+deploy/node: ## Install the .nvmrc Node version via nvm
+	if ! [ -s "$(NVM_DIR)/nvm.sh" ]; then
+		echo "Error: nvm is not installed at $(NVM_DIR)."
+		echo "Run 'make setup/js' to install it, or install Node $(NODE_VERSION)"
+		echo "system-wide and re-run with NODE_BIN=/path/to/node."
+		exit 1
+	fi
+	cd $(DEPLOY_DIR)
+	# nvm.sh trips `set -e` while loading; it reads .nvmrc from the cwd.
+	set +e
+	. $(NVM_DIR)/nvm.sh
+	set -e
+	nvm install
+	nvm use
+	node --version
 
 .PHONY: deploy/build
 deploy/build: ## Install exact dependencies and compile

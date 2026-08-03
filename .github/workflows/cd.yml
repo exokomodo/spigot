@@ -37,6 +37,24 @@ jobs:
           ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts
 
       - name: Deploy
+        env:
+          REPO_URL: https://github.com/${{ github.repository }}.git
         run: |
-          ssh "$SSH_USER@$SSH_HOST" \
-            "cd '$DEPLOY_DIR' && make deploy DEPLOY_BRANCH=main SERVER_NAME='$SERVER_NAME' APP_PORT='$APP_PORT'"
+          # The heredoc is unquoted so these variables expand here, on the
+          # runner, and arrive as literals on the server.
+          ssh "$SSH_USER@$SSH_HOST" bash -euo pipefail -s <<EOF
+            # \`make deploy\` owns the deploy, including its own clone-or-pull.
+            # This only covers the very first run, when there is no checkout to
+            # run make from at all.
+            if [ ! -d "$DEPLOY_DIR/.git" ]; then
+              echo "Bootstrapping $DEPLOY_DIR from $REPO_URL"
+              git clone --branch main "$REPO_URL" "$DEPLOY_DIR"
+            fi
+
+            cd "$DEPLOY_DIR"
+            make deploy \
+              DEPLOY_BRANCH=main \
+              DEPLOY_DIR="$DEPLOY_DIR" \
+              SERVER_NAME="$SERVER_NAME" \
+              APP_PORT="$APP_PORT"
+          EOF
