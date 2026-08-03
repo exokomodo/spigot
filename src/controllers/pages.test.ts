@@ -105,10 +105,10 @@ describe("GET /", () => {
 
   it("lists a feed with its entry count and RSS link", async () => {
     const { port, db } = await boot();
-    await createFeedFromRequest(db, { slug: "tech", title: "Tech Weekly" });
+    await createFeedFromRequest(db, { title: "Tech Weekly" });
     const body = (await request(port, "GET", "/")).body;
     expect(body).toContain("Tech Weekly");
-    expect(body).toContain("/feeds/tech.xml");
+    expect(body).toContain("/feeds/tech-weekly.xml");
   });
 
   it("references the vendored htmx build rather than a CDN", async () => {
@@ -122,7 +122,7 @@ describe("GET /", () => {
 describe("XSS", () => {
   it("renders a script payload in a title as inert text on the page", async () => {
     const { port, db } = await boot();
-    await createFeedFromRequest(db, { slug: "evil", title: SCRIPT_PAYLOAD });
+    await createFeedFromRequest(db, { title: SCRIPT_PAYLOAD });
     const body = (await request(port, "GET", "/")).body;
 
     expect(body).not.toContain(SCRIPT_PAYLOAD);
@@ -131,11 +131,7 @@ describe("XSS", () => {
 
   it("renders a script payload in a description as inert text", async () => {
     const { port, db } = await boot();
-    await createFeedFromRequest(db, {
-      slug: "evil",
-      title: "Fine",
-      description: SCRIPT_PAYLOAD,
-    });
+    await createFeedFromRequest(db, { title: "Fine", description: SCRIPT_PAYLOAD });
     const body = (await request(port, "GET", "/")).body;
 
     expect(body).not.toContain(SCRIPT_PAYLOAD);
@@ -144,7 +140,7 @@ describe("XSS", () => {
 
   it("escapes an attribute breakout payload", async () => {
     const { port, db } = await boot();
-    await createFeedFromRequest(db, { slug: "evil", title: ATTRIBUTE_PAYLOAD });
+    await createFeedFromRequest(db, { title: ATTRIBUTE_PAYLOAD });
     const body = (await request(port, "GET", "/")).body;
 
     expect(body).not.toContain(ATTRIBUTE_PAYLOAD);
@@ -157,7 +153,7 @@ describe("XSS", () => {
       port,
       "POST",
       "/feeds",
-      `slug=evil&title=${encodeURIComponent(SCRIPT_PAYLOAD)}`
+      `title=${encodeURIComponent(SCRIPT_PAYLOAD)}`
     );
 
     expect(res.status).toBe(201);
@@ -171,7 +167,7 @@ describe("XSS", () => {
       port,
       "POST",
       "/feeds",
-      `slug=evil&title=${encodeURIComponent(ATTRIBUTE_PAYLOAD)}`
+      `title=${encodeURIComponent(ATTRIBUTE_PAYLOAD)}`
     );
 
     expect(res.body).not.toContain(ATTRIBUTE_PAYLOAD);
@@ -182,11 +178,7 @@ describe("XSS", () => {
     const { port, db } = await boot();
     const titlePayload = `</td></tr><img src=x onerror=alert(1)>`;
     const descriptionPayload = `</table><svg onload=alert(2)>`;
-    await createFeedFromRequest(db, {
-      slug: "evil",
-      title: titlePayload,
-      description: descriptionPayload,
-    });
+    await createFeedFromRequest(db, { title: titlePayload, description: descriptionPayload });
     const body = (await request(port, "GET", "/")).body;
 
     // The text `onerror=alert(1)` does survive, as inert characters inside an
@@ -204,51 +196,54 @@ describe("XSS", () => {
 describe("POST /feeds", () => {
   it("returns the refreshed table body on success", async () => {
     const { port } = await boot();
-    const res = await request(port, "POST", "/feeds", "slug=tech&title=Tech+Weekly");
+    const res = await request(port, "POST", "/feeds", "title=Tech+Weekly");
     expect(res.status).toBe(201);
     expect(res.headers["content-type"]).toBe("text/html; charset=utf-8");
     expect(res.body).toContain("Tech Weekly");
-    expect(res.body).toContain("/feeds/tech.xml");
+    expect(res.body).toContain("/feeds/tech-weekly.xml");
   });
 
   it("clears the error box out of band after a success", async () => {
     const { port } = await boot();
-    const res = await request(port, "POST", "/feeds", "slug=tech&title=Tech");
+    const res = await request(port, "POST", "/feeds", "title=Tech");
     expect(res.body).toContain('hx-swap-oob="outerHTML"');
     expect(res.body).toContain('id="errors"');
   });
 
-  it("answers 400 and retargets at the error box for an invalid slug", async () => {
+  it("answers 400 and retargets at the error box for an unusable title", async () => {
     const { port } = await boot();
-    const res = await request(port, "POST", "/feeds", "slug=Not+A+Slug&title=T");
+    const res = await request(port, "POST", "/feeds", "title=%21%21%21");
 
     expect(res.status).toBe(400);
     expect(res.headers["hx-retarget"]).toBe("#errors");
     expect(res.headers["hx-reswap"]).toBe("innerHTML");
-    expect(res.body).toContain("slug");
+    expect(res.body).toContain("title");
+    // The form never offered a slug, so no complaint may name one.
+    expect(res.body).not.toContain("slug");
   });
 
   it("answers 400 when required fields are missing", async () => {
     const { port } = await boot();
     const res = await request(port, "POST", "/feeds", "");
     expect(res.status).toBe(400);
-    expect(res.body).toContain("slug");
     expect(res.body).toContain("title");
   });
 
-  it("answers 409 for a duplicate slug", async () => {
+  it("answers 409 when another feed already derived the same slug", async () => {
     const { port } = await boot();
-    await request(port, "POST", "/feeds", "slug=tech&title=First");
-    const res = await request(port, "POST", "/feeds", "slug=tech&title=Second");
+    await request(port, "POST", "/feeds", "title=Tech+Weekly");
+    const res = await request(port, "POST", "/feeds", "title=TECH++weekly%21");
 
     expect(res.status).toBe(409);
     expect(res.headers["hx-retarget"]).toBe("#errors");
     expect(res.body).toContain("already taken");
+    // The reader can only change the title, so that is what the error names.
+    expect(res.body).toContain("/feeds/tech-weekly");
   });
 
   it("does not create a feed when the form is rejected", async () => {
     const { port, db } = await boot();
-    await request(port, "POST", "/feeds", "slug=Bad+Slug&title=T");
+    await request(port, "POST", "/feeds", "title=%21%21%21");
     expect((await request(port, "GET", "/")).body).toContain("No feeds yet");
     expect(await db.instance.get("SELECT count(*) AS n FROM feeds")).toMatchObject({ n: 0 });
   });

@@ -98,17 +98,22 @@ describe("GET /api/feeds", () => {
 
   it("returns feeds with an entry count and feed url", async () => {
     const { port } = await boot();
-    await call(port, "POST", "/api/feeds", { slug: "tech", title: "Tech Weekly" });
+    await call(port, "POST", "/api/feeds", { title: "Tech Weekly" });
 
     const res = await call(port, "GET", "/api/feeds");
     expect(res.body.feeds).toMatchObject([
-      { slug: "tech", title: "Tech Weekly", entryCount: 0, feedUrl: "/feeds/tech.xml" },
+      {
+        slug: "tech-weekly",
+        title: "Tech Weekly",
+        entryCount: 0,
+        feedUrl: "/feeds/tech-weekly.xml",
+      },
     ]);
   });
 
   it("omits keys for columns that are null rather than emitting null", async () => {
     const { port } = await boot();
-    await call(port, "POST", "/api/feeds", { slug: "tech", title: "Tech" });
+    await call(port, "POST", "/api/feeds", { title: "Tech" });
     const [feed] = (await call(port, "GET", "/api/feeds")).body.feeds as Record<string, unknown>[];
     expect(feed).not.toHaveProperty("link");
     expect(feed).not.toHaveProperty("language");
@@ -118,17 +123,20 @@ describe("GET /api/feeds", () => {
 describe("POST /api/feeds", () => {
   it("creates a feed and answers 201 with a Location header", async () => {
     const { port } = await boot();
-    const res = await call(port, "POST", "/api/feeds", { slug: "tech", title: "Tech Weekly" });
+    const res = await call(port, "POST", "/api/feeds", { title: "Tech Weekly" });
 
     expect(res.status).toBe(201);
-    expect(res.headers.location).toBe("/api/feeds/tech");
-    expect(res.body.feed).toMatchObject({ slug: "tech", title: "Tech Weekly", entryCount: 0 });
+    expect(res.headers.location).toBe("/api/feeds/tech-weekly");
+    expect(res.body.feed).toMatchObject({
+      slug: "tech-weekly",
+      title: "Tech Weekly",
+      entryCount: 0,
+    });
   });
 
   it("stores the optional fields it was given", async () => {
     const { port } = await boot();
     const res = await call(port, "POST", "/api/feeds", {
-      slug: "tech",
       title: "Tech",
       description: "Weekly roundup",
       link: "https://tech.example/",
@@ -141,14 +149,25 @@ describe("POST /api/feeds", () => {
     });
   });
 
-  it("answers 400 with per-field details for an invalid slug", async () => {
+  it("answers 400 with per-field details for a title no slug can come from", async () => {
     const { port } = await boot();
-    const res = await call(port, "POST", "/api/feeds", { slug: "Not A Slug", title: "T" });
+    const res = await call(port, "POST", "/api/feeds", { title: "!!!" });
 
     expect(res.status).toBe(400);
     expect(res.body.error).toMatchObject({ code: "invalid_request" });
     const details = (res.body.error as { details: { field: string }[] }).details;
-    expect(details.map((d) => d.field)).toContain("slug");
+    expect(details.map((d) => d.field)).toEqual(["title"]);
+  });
+
+  it("derives the slug from the title and ignores one sent in the body", async () => {
+    const { port } = await boot();
+    const res = await call(port, "POST", "/api/feeds", {
+      slug: "something-else",
+      title: "Tech Weekly",
+    });
+
+    expect(res.status).toBe(201);
+    expect(res.body.feed).toMatchObject({ slug: "tech-weekly" });
   });
 
   it("answers 400 when the body is missing entirely", async () => {
@@ -158,10 +177,10 @@ describe("POST /api/feeds", () => {
     expect(res.body.error).toMatchObject({ code: "invalid_request" });
   });
 
-  it("answers 409 for a duplicate slug", async () => {
+  it("answers 409 when two titles derive the same slug", async () => {
     const { port } = await boot();
-    await call(port, "POST", "/api/feeds", { slug: "tech", title: "First" });
-    const res = await call(port, "POST", "/api/feeds", { slug: "tech", title: "Second" });
+    await call(port, "POST", "/api/feeds", { title: "Tech Weekly" });
+    const res = await call(port, "POST", "/api/feeds", { title: "TECH  weekly!" });
 
     expect(res.status).toBe(409);
     expect(res.body.error).toMatchObject({ code: "slug_taken" });
@@ -169,8 +188,8 @@ describe("POST /api/feeds", () => {
 
   it("keeps the original feed after a rejected duplicate", async () => {
     const { port } = await boot();
-    await call(port, "POST", "/api/feeds", { slug: "tech", title: "First" });
-    await call(port, "POST", "/api/feeds", { slug: "tech", title: "Second" });
+    await call(port, "POST", "/api/feeds", { title: "First" });
+    await call(port, "POST", "/api/feeds", { title: "first" });
 
     const feeds = (await call(port, "GET", "/api/feeds")).body.feeds as { title: string }[];
     expect(feeds).toHaveLength(1);
@@ -183,7 +202,6 @@ describe("POST /api/feeds", () => {
     // escaping this response needs.
     const { port } = await boot();
     const res = await call(port, "POST", "/api/feeds", {
-      slug: "evil",
       title: "<script>alert(1)</script>",
     });
     expect(res.body.feed).toMatchObject({ title: "<script>alert(1)</script>" });

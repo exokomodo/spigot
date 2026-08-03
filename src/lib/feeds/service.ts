@@ -8,6 +8,7 @@ import {
   createFeed,
   listFeedSummaries,
 } from "./repository.js";
+import { toSlug } from "./slug.js";
 
 /**
  * Validation and the create/list operations, shared by the JSON API and the
@@ -15,15 +16,6 @@ import {
  * cannot drift on what a valid feed is.
  */
 
-/**
- * A slug appears in `/feeds/<slug>.xml`, so it has to survive a URL untouched.
- * Lowercase alphanumerics in hyphen-separated groups: no leading, trailing or
- * doubled hyphens, nothing needing percent-encoding, and no case for two slugs
- * to differ only by.
- */
-export const SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
-
-export const SLUG_MAX_LENGTH = 100;
 export const TITLE_MAX_LENGTH = 200;
 export const DESCRIPTION_MAX_LENGTH = 2000;
 
@@ -48,20 +40,21 @@ function readString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
-function validateSlug(raw: string | undefined, issues: ValidationIssue[]): string {
-  const slug = raw?.trim() ?? "";
-  if (slug.length === 0) {
-    issues.push({ field: "slug", message: "is required" });
-  } else if (slug.length > SLUG_MAX_LENGTH) {
+/**
+ * Derives the slug from the title, complaining about the title when nothing
+ * usable comes out.
+ *
+ * The complaint lands on `title` rather than `slug` because that is the field
+ * the caller actually filled in — an error about a slug would name something
+ * they were never asked for. An already-empty title is left alone, since
+ * {@link validateTitle} has said the useful thing about it.
+ */
+function deriveSlug(title: string, issues: ValidationIssue[]): string {
+  const slug = toSlug(title);
+  if (slug.length === 0 && title.length > 0) {
     issues.push({
-      field: "slug",
-      message: `must be at most ${String(SLUG_MAX_LENGTH)} characters`,
-    });
-  } else if (!SLUG_PATTERN.test(slug)) {
-    issues.push({
-      field: "slug",
-      message:
-        "must be lowercase letters and digits separated by single hyphens, such as my-feed-name",
+      field: "title",
+      message: "must contain at least one letter or digit, since the feed's address comes from it",
     });
   }
   return slug;
@@ -85,14 +78,18 @@ function validateTitle(raw: string | undefined, issues: ValidationIssue[]): stri
  *
  * Takes `unknown` rather than a typed body: the value came off the wire, and
  * typing it as an object would be a claim this function exists to establish.
+ *
+ * A `slug` in the body is ignored. The slug is always derived from the title,
+ * so a feed has exactly one name to keep straight and the two can never
+ * disagree.
  */
 export function parseNewFeed(body: unknown): NewFeed {
   const fields: Record<string, unknown> =
     typeof body === "object" && body !== null ? (body as Record<string, unknown>) : {};
 
   const issues: ValidationIssue[] = [];
-  const slug = validateSlug(readString(fields.slug), issues);
   const title = validateTitle(readString(fields.title), issues);
+  const slug = deriveSlug(title, issues);
 
   const description = readString(fields.description)?.trim() ?? "";
   if (description.length > DESCRIPTION_MAX_LENGTH) {

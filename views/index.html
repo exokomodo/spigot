@@ -20,10 +20,6 @@
       hx-on::after-request="if (event.detail.successful) this.reset()"
     >
       <label>
-        Slug
-        <input name="slug" placeholder="my-feed-name" required />
-      </label>
-      <label>
         Title
         <input name="title" placeholder="My Feed" required />
       </label>
@@ -32,6 +28,10 @@
         <input name="description" placeholder="Optional" />
       </label>
       <button type="submit">Create feed</button>
+      <p class="form-hint">
+        The address comes from the title: <em>My Feed</em> is served at
+        <code>/feeds/my-feed.xml</code>.
+      </p>
     </form>
     <div id="errors" role="alert"></div>
 
