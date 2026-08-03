@@ -1,7 +1,7 @@
 import path from "node:path";
 import express from "express";
-import Application from "./application";
-import Request, { DefaultDependenciesKey } from "./request";
+import Application from "./application.js";
+import Request, { DefaultDependenciesKey } from "./request.js";
 
 export type HttpMethod = "GET" | "POST" | "PUT" | "DELETE" | "PATCH";
 

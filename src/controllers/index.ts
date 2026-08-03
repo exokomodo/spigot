@@ -1,5 +1,5 @@
-import Dependencies from "../lib/dependencies";
-import { Controller } from "../lib/rest/controller";
+import Dependencies from "../lib/dependencies.js";
+import { Controller } from "../lib/rest/controller.js";
 
 const IndexController: Controller<Dependencies> = {
   basePath: "/",

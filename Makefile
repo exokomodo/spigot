@@ -18,7 +18,7 @@ JS_EXEC ?= npm
 JS_INSTALL ?= install
 
 MAIN ?= ./src/main.ts
-EXE ?= ./build/index.js
+EXE ?= ./build/main.js
 
 ##@ Development Environment
 

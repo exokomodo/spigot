@@ -1,5 +1,5 @@
 import express from "express";
-import { DEFAULT_DEPENDENCIES_KEY, DefaultDependenciesKey, fromExpressRequest } from "./request";
+import { DEFAULT_DEPENDENCIES_KEY, DefaultDependenciesKey, fromExpressRequest } from "./request.js";
 
 type Application<
   TDependencies,
