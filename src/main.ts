@@ -1,11 +1,14 @@
+import path from "node:path";
 import express from "express";
 import { loadConfig } from "./lib/config.js";
 import { loadDatabase } from "./lib/database.js";
 import Dependencies from "./lib/dependencies.js";
+import { PUBLIC_DIRECTORY } from "./lib/html/template.js";
 import { registerController } from "./lib/rest/controller.js";
 import { fromExpressApp } from "./lib/rest/application.js";
-import IndexController from "./controllers/index.js";
+import ApiFeedsController from "./controllers/api/feeds.js";
 import FeedsController from "./controllers/feeds.js";
+import PagesController from "./controllers/pages.js";
 
 async function main() {
   const config = loadConfig();
@@ -16,11 +19,12 @@ async function main() {
   };
   const app = fromExpressApp(express(), dependencies);
 
-  app.use((req, res, next) => {
-    next();
-  });
+  // Both ship with Express 5. The form posts urlencoded; the API takes JSON.
+  app.use(express.json());
+  app.use(express.urlencoded({ extended: false }));
+  app.use("/vendor", express.static(path.join(PUBLIC_DIRECTORY, "vendor")));
 
-  for (const controller of [IndexController, FeedsController]) {
+  for (const controller of [ApiFeedsController, PagesController, FeedsController]) {
     registerController(app, controller);
   }
 

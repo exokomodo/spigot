@@ -50,6 +50,20 @@ export interface FeedWithEntries {
   readonly entries: readonly EntryRow[];
 }
 
+/** A feed row plus how many entries it holds, for the listing. */
+export interface FeedSummaryRow extends FeedRow {
+  readonly entry_count: number;
+}
+
+/** The columns a caller may set when creating a feed. */
+export interface NewFeed {
+  readonly slug: string;
+  readonly title: string;
+  readonly description?: string;
+  readonly link?: string;
+  readonly language?: string;
+}
+
 /** How many entries a feed serves when the caller does not say otherwise. */
 export const DEFAULT_ENTRY_LIMIT = 50;
 
@@ -77,6 +91,75 @@ export async function findEntriesByFeedId(
       LIMIT ?`,
     [feedId, limit]
   );
+}
+
+/**
+ * Every feed with its entry count, newest first.
+ *
+ * One grouped query rather than a count per feed: a LEFT JOIN keeps feeds that
+ * have no entries yet, which are exactly the feeds someone has just created and
+ * most wants to see in the listing.
+ */
+export async function listFeedSummaries(db: Database): Promise<readonly FeedSummaryRow[]> {
+  return db.instance.all<FeedSummaryRow[]>(
+    `SELECT feeds.*, COUNT(entries.id) AS entry_count
+       FROM feeds
+       LEFT JOIN entries ON entries.feed_id = feeds.id
+      GROUP BY feeds.id
+      ORDER BY feeds.created_at DESC, feeds.id DESC`
+  );
+}
+
+/** Raised when a slug is already taken, so callers can answer 409 rather than 500. */
+export class DuplicateSlugError extends Error {
+  readonly slug: string;
+
+  constructor(slug: string) {
+    super(`A feed with the slug "${slug}" already exists`);
+    this.name = "DuplicateSlugError";
+    this.slug = slug;
+  }
+}
+
+/**
+ * True for the UNIQUE violation on `feeds.slug`.
+ *
+ * Narrow on purpose: a NOT NULL or CHECK failure is also a constraint error but
+ * means something else entirely, and answering 409 for those would report a bug
+ * in this code as a caller mistake.
+ */
+function isDuplicateSlugViolation(error: unknown): boolean {
+  return error instanceof Error && /UNIQUE constraint failed:\s*feeds\.slug/i.test(error.message);
+}
+
+/**
+ * Inserts a feed and returns the stored row.
+ *
+ * The duplicate check is the INSERT itself rather than a SELECT beforehand: a
+ * pre-check races another request between the read and the write, while the
+ * UNIQUE index cannot be raced.
+ */
+export async function createFeed(db: Database, feed: NewFeed): Promise<FeedRow> {
+  const inserted = await db.instance
+    .run(
+      `INSERT INTO feeds (slug, title, description, link, language)
+       VALUES (?, ?, ?, ?, ?)`,
+      [feed.slug, feed.title, feed.description ?? "", feed.link ?? null, feed.language ?? null]
+    )
+    .catch((error: unknown) => {
+      if (isDuplicateSlugViolation(error)) {
+        throw new DuplicateSlugError(feed.slug);
+      }
+      throw error;
+    });
+
+  const created = await db.instance.get<FeedRow>("SELECT * FROM feeds WHERE id = ?", [
+    inserted.lastID,
+  ]);
+  if (created === undefined) {
+    throw new Error(`Feed ${String(inserted.lastID)} vanished immediately after being created`);
+  }
+  return created;
 }
 
 /** Loads a feed and its entries in one call, or `undefined` if the slug is unknown. */
