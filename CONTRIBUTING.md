@@ -1,3 +1,3 @@
 # Contributing
 
-template
+Please write code, thank you

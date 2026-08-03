@@ -17,7 +17,7 @@ endif
 JS_EXEC ?= npm
 JS_INSTALL ?= install
 
-MAIN ?= ./src/index.ts
+MAIN ?= ./src/main.ts
 EXE ?= ./build/index.js
 
 ##@ Development Environment
