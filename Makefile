@@ -176,6 +176,10 @@ SYSTEMD_DIR ?= /etc/systemd/system
 ACME_WEBROOT ?= /var/www/certbot
 CERT_DIR ?= /etc/letsencrypt/live/$(SERVER_NAME)
 CERTBOT_EMAIL ?=
+# Set to 1 to reissue even when the certificate is still valid. Needed once to
+# migrate a certificate that was originally issued with `certbot --nginx`, since
+# certbot only rewrites the renewal config when it actually issues.
+CERTBOT_FORCE ?=
 
 # Substitutes the @PLACEHOLDER@ tokens in the etc/ templates.
 RENDER = sed \
@@ -298,14 +302,18 @@ deploy/tls: ## Issue a Let's Encrypt certificate for $(SERVER_NAME), then switch
 	# The HTTP site must already be serving $(ACME_WEBROOT) for the challenge.
 	$(MAKE) deploy/nginx
 	# certonly, so certbot issues the certificate and never edits nginx config.
+	# --cert-name targets the existing lineage instead of creating a -0001
+	# duplicate, which is what makes this safe to re-run and safe to point at a
+	# certificate that was first issued through the nginx plugin.
 	$(SUDO) certbot certonly \
 		--webroot \
 		--webroot-path $(ACME_WEBROOT) \
+		--cert-name $(SERVER_NAME) \
 		--domain $(SERVER_NAME) \
 		--email $(CERTBOT_EMAIL) \
 		--agree-tos \
 		--no-eff-email \
-		--keep-until-expiring \
+		$(if $(CERTBOT_FORCE),--force-renewal,--keep-until-expiring) \
 		--deploy-hook 'systemctl reload nginx'
 	# Now that the certificate exists, this installs the HTTPS config.
 	$(MAKE) deploy/nginx

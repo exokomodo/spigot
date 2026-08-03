@@ -182,11 +182,22 @@ server name have exactly one source of truth.
 
 - [etc/nginx/spigot.conf](etc/nginx/spigot.conf) →
   `/etc/nginx/sites-available/spigot.conf`, symlinked into `sites-enabled/`
-  (the stock `default` site is removed, since it also claims port 80)
+  (the stock `default` site is removed, since it also claims port 80).
+  Installed when no certificate exists yet: port 80 only, proxying directly.
+- [etc/nginx/spigot-tls.conf](etc/nginx/spigot-tls.conf) → the same
+  destination, installed instead once `/etc/letsencrypt/live/$SERVER_NAME/`
+  holds a certificate: port 80 redirects, port 443 proxies.
+- [etc/nginx/snippets/spigot-proxy.conf](etc/nginx/snippets/spigot-proxy.conf)
+  → `/etc/nginx/snippets/spigot-proxy.conf`, the `proxy_pass` body both of the
+  above include, so the proxy is defined once.
 - [etc/systemd/spigot.service](etc/systemd/spigot.service) →
   `/etc/systemd/system/spigot.service`
 - [etc/systemd/spigot.env.example](etc/systemd/spigot.env.example) →
   `/etc/spigot/spigot.env`, only if that file does not exist yet
+
+If `nginx -t` rejects a freshly installed config, the previous files are
+restored and nginx is never reloaded, so a bad deploy cannot take the site
+down.
 
 `/etc/spigot/spigot.env` is for host-specific overrides and secrets. Deploys
 never overwrite it.
