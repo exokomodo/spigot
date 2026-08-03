@@ -163,7 +163,10 @@ no containers, no process manager.
 - `nginx`
 - `git`, `make`, and a C toolchain (`build-essential`, `python3`) for the
   `sqlite3` native binding
-- `nvm`, or the Node version from [.nvmrc](.nvmrc) installed system-wide
+- `nvm`, or the Node version from [.nvmrc](.nvmrc) installed system-wide. A
+  non-interactive SSH shell never sources `nvm.sh`, so the `Makefile` looks
+  under `$NVM_DIR/versions/node` when `node` is off `PATH` and pins the
+  absolute path it finds into the systemd unit.
 - A deploy user with `NOPASSWD` sudo, so CD can write `/etc` and restart units
 
 Bootstrap once, as the deploy user:

@@ -26,10 +26,11 @@ NVM_DIR ?= $(HOME)/.nvm
 # A non-interactive SSH shell never sources nvm.sh, so `node` is off PATH even
 # when nvm installed it. Fall back to the nvm directory: the version in .nvmrc
 # first, then the newest one present.
-NODE_BIN ?= $(shell \
-	command -v node 2>/dev/null \
-	|| ls -1 $(NVM_DIR)/versions/node/v$(NODE_VERSION)*/bin/node 2>/dev/null | sort -V | tail -1 \
-	|| true)
+NODE_BIN ?= $(shell { \
+	command -v node 2>/dev/null || true; \
+	ls -1 $(NVM_DIR)/versions/node/v$(NODE_VERSION)*/bin/node 2>/dev/null | sort -V | tail -1 || true; \
+	ls -1 $(NVM_DIR)/versions/node/v*/bin/node 2>/dev/null | sort -V | tail -1 || true; \
+	} | head -1)
 
 ifneq (,$(NODE_BIN))
 export PATH := $(patsubst %/,%,$(dir $(NODE_BIN))):$(PATH)
