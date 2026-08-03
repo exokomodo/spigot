@@ -1,9 +1,5 @@
 # Security Policy
 
-## Supported Versions
-
-template
-
 ## Reporting a Vulnerability
 
-template
+Post an issue please

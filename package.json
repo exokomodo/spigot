@@ -1,5 +1,5 @@
 {
-  "name": "template-typescript",
+  "name": "spigot",
   "type": "module",
   "version": "0.1.0",
   "engines": {
@@ -7,7 +7,7 @@
   },
   "scripts": {
     "build": "tsc",
-    "dev": "tsx src/index.ts",
+    "dev": "tsx src/main.ts",
     "start": "node build/index.js",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -25,7 +25,9 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.0.0",
+    "@types/express": "^5.0.6",
     "@types/node": "^26.1.2",
+    "@types/sqlite3": "^3.1.11",
     "concurrently": "^10.0.4",
     "eslint": "^10.8.0",
     "jiti": "^2.7.0",
@@ -36,5 +38,10 @@
     "typescript": "^5.0.0",
     "typescript-eslint": "^8.0.0",
     "vitest": "^3.0.0"
+  },
+  "dependencies": {
+    "express": "^5.2.1",
+    "sqlite": "^5.1.1",
+    "sqlite3": "^6.0.1"
   }
 }
