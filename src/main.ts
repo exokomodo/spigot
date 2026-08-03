@@ -1,10 +1,10 @@
 import express from "express";
-import { loadConfig } from "./lib/config";
-import { loadDatabase } from "./lib/database";
-import Dependencies from "./lib/dependencies";
-import { registerController } from "./lib/rest/controller";
-import { fromExpressApp } from "./lib/rest/application";
-import IndexController from "./controllers/index";
+import { loadConfig } from "./lib/config.js";
+import { loadDatabase } from "./lib/database.js";
+import Dependencies from "./lib/dependencies.js";
+import { registerController } from "./lib/rest/controller.js";
+import { fromExpressApp } from "./lib/rest/application.js";
+import IndexController from "./controllers/index.js";
 
 async function main() {
   const config = loadConfig();

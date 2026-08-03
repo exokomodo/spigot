@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { loadConfig } from "./config";
+import { loadConfig } from "./config.js";
 
 describe("loadConfig", () => {
   afterEach(() => {
