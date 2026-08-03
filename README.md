@@ -146,3 +146,11 @@ Two workflows run on pull requests to `main`:
 
 Running `make fix && make check && make test` locally covers everything both
 workflows do.
+
+## Deployment
+
+All you need is a linux server with the following:
+
+- `nvm`, or the specific node version we use installed
+- `sqlite3`
+- (optional) `make`
