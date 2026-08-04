@@ -17,6 +17,11 @@ function styles(): SafeHtml {
   return safe(render("styles", {}));
 }
 
+/** The source link every page carries, so a reader can check what is running. */
+function footer(): SafeHtml {
+  return safe(render("footer", {}));
+}
+
 /**
  * A link, or inert text when the URL is not one a browser should follow.
  *
@@ -57,7 +62,7 @@ export function renderFeedRows(rows: readonly FeedSummaryRow[]): SafeHtml {
 
 /** The whole listing page. */
 export function renderIndexPage(rows: readonly FeedSummaryRow[]): string {
-  return render("index", { rows: renderFeedRows(rows), styles: styles() });
+  return render("index", { rows: renderFeedRows(rows), styles: styles(), footer: footer() });
 }
 
 /**
@@ -128,12 +133,13 @@ export function renderFeedPage(feed: FeedRow, entries: readonly EntryRow[]): str
     siteLink: renderSiteLink(feed),
     entries: renderEntryRows(feed.slug, entries),
     styles: styles(),
+    footer: footer(),
   });
 }
 
 /** The 404 page. */
 export function renderNotFoundPage(message: string): string {
-  return render("not-found", { message, styles: styles() });
+  return render("not-found", { message, styles: styles(), footer: footer() });
 }
 
 /** The error list swapped in when a submitted form fails validation. */

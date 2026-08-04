@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { EntryRow, FeedRow } from "./repository.js";
-import { formatPublishedAt, renderEntryRow, renderFeedPage, renderLink } from "./views.js";
+import {
+  formatPublishedAt,
+  renderEntryRow,
+  renderFeedPage,
+  renderIndexPage,
+  renderLink,
+  renderNotFoundPage,
+} from "./views.js";
 
 const feed: FeedRow = {
   id: 1,
@@ -159,5 +166,17 @@ describe("renderFeedPage", () => {
 
   it("omits the site link entirely when the feed has none", () => {
     expect(renderFeedPage(feed, [])).not.toContain(">Site<");
+  });
+});
+
+describe("the footer", () => {
+  it.each([
+    ["the listing page", () => renderIndexPage([])],
+    ["a feed page", () => renderFeedPage(feed, [entry()])],
+    ["the 404 page", () => renderNotFoundPage("No such feed")],
+  ])("links to the source from %s", (_name, renderPage) => {
+    const html = renderPage();
+    expect(html).toContain('href="https://github.com/exokomodo/spigot"');
+    expect(html).toContain("Source on GitHub");
   });
 });
