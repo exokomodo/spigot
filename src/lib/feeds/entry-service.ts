@@ -1,5 +1,5 @@
 import Database from "../database.js";
-import { stripQueryString } from "../html/strip-query.js";
+import { stripTrackingParams } from "../html/strip-tracking.js";
 import { SAFE_PROTOCOL_LIST, isSafeHttpUrl } from "../html/url.js";
 import {
   DuplicateGuidError,
@@ -48,16 +48,12 @@ function validateMaxLength(
   return value;
 }
 
-function validateEntryUrl(
-  raw: string | undefined,
-  issues: ValidationIssue[],
-  stripQuery: boolean
-): string {
+function validateEntryUrl(raw: string | undefined, issues: ValidationIssue[]): string {
   const trimmed = raw?.trim() ?? "";
   // Stripped before the checks below rather than after, so the length limit and
   // the scheme check both judge the URL that will actually be stored — a
   // tracking-laden link is often over the limit only because of its query.
-  const url = stripQuery ? stripQueryString(trimmed) : trimmed;
+  const url = stripTrackingParams(trimmed);
   if (url.length === 0) {
     issues.push({ field: "url", message: "is required" });
   } else if (url.length > ENTRY_URL_MAX_LENGTH) {
@@ -159,18 +155,12 @@ function validateEnclosure(
 /**
  * How to read a request, as opposed to what the request says.
  *
- * These are choices the transport makes on the caller's behalf, so they travel
- * beside the body rather than inside it — a request cannot ask to be parsed
- * differently by adding a field to the entry it is submitting.
+ * These travel beside the body rather than inside it, so a request cannot ask
+ * to be parsed differently by adding a field to the entry it is submitting.
+ * Only the clock lives here today; it stays an options object so adding the
+ * next one does not move every call site again.
  */
 export interface NewEntryOptions {
-  /**
-   * Drop the query string from the entry url before validating and storing it.
-   *
-   * Off by default. Callers that predate the flag keep storing exactly the URL
-   * they send, and losing part of a URL is not something to do unasked.
-   */
-  readonly stripQuery?: boolean;
   /** The clock, injectable so a test can assert the default publication date without racing it. */
   readonly now?: Date;
 }
@@ -185,17 +175,17 @@ export function parseNewEntry(
   const now = options.now ?? new Date();
 
   const issues: ValidationIssue[] = [];
-  const url = validateEntryUrl(readString(fields.url), issues, options.stripQuery === true);
+  const url = validateEntryUrl(readString(fields.url), issues);
   const title = validateEntryTitle(readString(fields.title), issues);
   const publishedAt = validatePublishedAt(readString(fields.publishedAt), issues, now);
 
   // An entry with no guid of its own is identified by where it lives, which is
   // what `isPermaLink` means — so the default guid and the flag agree.
   //
-  // `url` is the stripped one, because `validateEntryUrl` already ran. That
-  // ordering is the point: a permalink guid claims to be the entry's address,
-  // and one carrying a query the entry itself does not have would be a lie that
-  // also changes which entries count as duplicates.
+  // `url` has had its tracking parameters removed, because `validateEntryUrl`
+  // already ran. That ordering is the point: a permalink guid claims to be the
+  // entry's address, and one carrying a `utm_source` the entry itself does not
+  // have would be a lie that also changes which entries count as duplicates.
   const rawGuid = readString(fields.guid)?.trim() ?? "";
   const guid = validateMaxLength(
     "guid",
@@ -237,54 +227,6 @@ export function parseNewEntry(
     publishedAt,
     ...enclosure,
   };
-}
-
-const TRUTHY_STRIP_VALUES: ReadonlySet<string> = new Set(["", "true", "1", "on"]);
-const FALSY_STRIP_VALUES: ReadonlySet<string> = new Set(["false", "0", "off"]);
-
-/** The accepted spellings, for the error a mistyped flag gets. */
-export const STRIP_FLAG_VALUE_LIST = "true, 1, on, false, 0 or off";
-
-/**
- * Reads the `strip` flag a request may carry, defaulting to off.
- *
- * A value that is neither spelling raises rather than being read as false. A
- * flag whose whole job is to remove something is the wrong place to guess: a
- * typo would quietly store the tracking parameters the caller asked to drop,
- * and nothing about the 201 would say so.
- *
- * `?strip` with no value arrives as an empty string and reads as on, since
- * writing the flag at all is the request.
- */
-export function parseStripFlag(raw: unknown): boolean {
-  if (raw === undefined) {
-    return false;
-  }
-  // Anything other than a single string is a repeated or nested parameter,
-  // which cannot be resolved into one answer and so is a mistake, not a value.
-  const value = typeof raw === "string" ? raw.trim().toLowerCase() : undefined;
-  if (value !== undefined && TRUTHY_STRIP_VALUES.has(value)) {
-    return true;
-  }
-  if (value !== undefined && FALSY_STRIP_VALUES.has(value)) {
-    return false;
-  }
-  throw new ValidationError([
-    { field: "strip", message: `must be ${STRIP_FLAG_VALUE_LIST}, or be left off` },
-  ]);
-}
-
-/**
- * Reads the `strip` flag out of a submitted form body.
- *
- * The HTML form has nowhere else to put it — a form posts fields, not query
- * strings — so the flag arrives beside the entry's own fields and is picked
- * back out here rather than left for `parseNewEntry` to mistake for one.
- */
-export function stripFlagFromBody(body: unknown): boolean {
-  const fields: Record<string, unknown> =
-    typeof body === "object" && body !== null ? (body as Record<string, unknown>) : {};
-  return parseStripFlag(fields.strip);
 }
 
 /** Raised when the id in the path names no entry in the feed, so callers can answer 404. */
@@ -388,12 +330,11 @@ export function parseEntryUpdate(
   const update: MutableEntryUpdate = {};
 
   if (Object.hasOwn(fields, "url")) {
-    // Never stripped, deliberately. Stripping is a choice about a URL arriving
-    // from somewhere else; a url typed into the edit form is already the one the
-    // author means, and silently shortening what they just typed would be the
-    // surprise. An entry stored with a query it should not have is fixed by
-    // editing that query out.
-    const url = validateEntryUrl(readString(fields.url), issues, false);
+    // Tracking parameters go here too, on the same terms as a new entry: a url
+    // is edited by pasting a fresh one, which arrives carrying whatever the
+    // share sheet added to it. Only the trackers are removed, so the url the
+    // author typed still points where they meant it to.
+    const url = validateEntryUrl(readString(fields.url), issues);
     update.url = url;
     // A permalink guid *is* the entry's url — that is what `isPermaLink` claims
     // and what `parseNewEntry` stores — so moving the url has to move the guid

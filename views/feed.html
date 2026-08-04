@@ -41,15 +41,11 @@
         Description
         <input name="description" placeholder="Optional" />
       </label>
-      <label class="checkbox">
-        <input name="strip" type="checkbox" value="true" checked />
-        Remove the query string from the URL (everything after the <code>?</code>)
-      </label>
       <button type="submit">Add entry</button>
       <p class="form-hint">
-        Published and description are optional; an entry with no publish date is dated now. Removing
-        the query string drops tracking such as <code>?utm_source=</code>; the
-        <code>#anchor</code> is kept. Uncheck it to store the URL exactly as pasted.
+        Published and description are optional; an entry with no publish date is dated now. Tracking
+        parameters such as <code>utm_source</code> and <code>si</code> are removed from the URL; the
+        rest of it is stored exactly as pasted.
       </p>
     </form>
     <div id="errors" role="alert"></div>

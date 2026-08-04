@@ -7,7 +7,6 @@ import {
   createEntryFromRequest,
   deleteEntryFromRequest,
   findEntryFromRequest,
-  stripFlagFromBody,
   updateEntryFromRequest,
 } from "../lib/feeds/entry-service.js";
 import { findFeedWithEntries, toRssFeed } from "../lib/feeds/index.js";
@@ -166,17 +165,7 @@ export function createEntryFragmentHandler(
       return;
     }
     try {
-      /*
-       * The form's checkbox is checked by default, but an unchecked box posts
-       * nothing at all, so absent-means-off gives the page the opposite default
-       * from the API without either side special-casing the other.
-       *
-       * The flag rides in the body because a form has no query string to put it
-       * in; the JSON API reads the same flag from its query string. Both hand
-       * the service the same option.
-       */
-      const stripQuery = stripFlagFromBody(req.body);
-      await createEntryFromRequest(req.deps.db, slug, req.body, { stripQuery });
+      await createEntryFromRequest(req.deps.db, slug, req.body);
       const loaded = await findFeedWithEntries(req.deps.db, slug);
       const entries = loaded?.entries ?? [];
       res

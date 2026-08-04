@@ -6,7 +6,6 @@ import {
   FeedNotFoundError,
   createEntryFromRequest,
   deleteEntryFromRequest,
-  parseStripFlag,
   updateEntryFromRequest,
 } from "../../lib/feeds/entry-service.js";
 import { toEntryJson } from "../../lib/feeds/presenter.js";
@@ -65,18 +64,7 @@ export function createEntryHandler(req: Request<Dependencies>, res: express.Resp
       return;
     }
     try {
-      /*
-       * `strip` says how to read the request, not what the entry is, so it goes
-       * in the query string and the body stays a description of the entry.
-       * The HTML form reads the same flag from its body instead — a form has no
-       * query string to put it in — which is each transport using what it has,
-       * not an inconsistency.
-       *
-       * Absent means off, so a caller written before this existed keeps getting
-       * back exactly the URL it sent.
-       */
-      const stripQuery = parseStripFlag(req.query.strip);
-      const { entry } = await createEntryFromRequest(req.deps.db, slug, req.body, { stripQuery });
+      const { entry } = await createEntryFromRequest(req.deps.db, slug, req.body);
       res
         .status(201)
         .location(`/api/feeds/${slug}/entries/${String(entry.id)}`)
