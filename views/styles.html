@@ -15,8 +15,17 @@
       sans-serif;
   }
   h1 {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
     margin: 0 0 0.25rem;
     font-size: 1.5rem;
+  }
+  /* Sized in `em` so the mark scales with the heading rather than against it. */
+  h1 .mark {
+    width: 1.6em;
+    height: 1.6em;
+    border-radius: 4px;
   }
   .tagline {
     margin: 0 0 2rem;
