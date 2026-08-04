@@ -17,6 +17,11 @@ function styles(): SafeHtml {
   return safe(render("styles", {}));
 }
 
+/** The favicon and manifest links every page carries. */
+function icons(): SafeHtml {
+  return safe(render("head-icons", {}));
+}
+
 /** The source link every page carries, so a reader can check what is running. */
 function footer(): SafeHtml {
   return safe(render("footer", {}));
@@ -127,6 +132,7 @@ export function renderFeedRows(rows: readonly FeedSummaryRow[]): SafeHtml {
 export function renderIndexPage(rows: readonly FeedSummaryRow[]): string {
   return render("index", {
     rows: renderFeedRows(rows),
+    icons: icons(),
     styles: styles(),
     copyScript: copyScript(),
     footer: footer(),
@@ -244,6 +250,7 @@ export function renderFeedPage(feed: FeedRow, entries: readonly EntryRow[]): str
     entryCount: entries.length,
     siteLink: renderSiteLink(feed),
     entries: renderEntryRows(feed.slug, entries),
+    icons: icons(),
     styles: styles(),
     copyScript: copyScript(),
     footer: footer(),
@@ -252,7 +259,7 @@ export function renderFeedPage(feed: FeedRow, entries: readonly EntryRow[]): str
 
 /** The 404 page. */
 export function renderNotFoundPage(message: string): string {
-  return render("not-found", { message, styles: styles(), footer: footer() });
+  return render("not-found", { message, icons: icons(), styles: styles(), footer: footer() });
 }
 
 /** The error list swapped in when a submitted form fails validation. */

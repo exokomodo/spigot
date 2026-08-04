@@ -9,8 +9,8 @@
   hx-disabled-elt="this"
 >
   <!--
-    Inline rather than an asset: there is no icon build step, and the static
-    directory only serves /vendor. `aria-hidden` because the button already has
+    Inline rather than an asset: there is no icon build step, and an inline icon
+    inherits `currentColor` rather than needing a variant per state. `aria-hidden` because the button already has
     a name, so announcing the drawing too would say everything twice.
   -->
   <svg

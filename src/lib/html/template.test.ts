@@ -100,6 +100,7 @@ describe("template files", () => {
       "feed-rows-empty",
       "copy-rss-button",
       "copy-script",
+      "head-icons",
       "entry-row",
       "entry-edit-form",
       "edit-button",
@@ -110,6 +111,42 @@ describe("template files", () => {
     ]) {
       expect(loadTemplate(name).length).toBeGreaterThan(0);
     }
+  });
+
+  /*
+   * A favicon link is only ever exercised by a browser quietly fetching it, so a
+   * typo in a filename shows up as a missing icon and nothing else — no error, no
+   * failing request anyone sees. These walk the markup rather than restating the
+   * list, so renaming a file without renaming the reference fails here.
+   */
+  describe("the icon set", () => {
+    const inPublic = (href: string): string => path.join(PUBLIC_DIRECTORY, href.replace(/^\//, ""));
+
+    it("links only to files that are actually shipped", () => {
+      const hrefs = [...loadTemplate("head-icons").matchAll(/href="([^"]+)"/g)].map(
+        ([, href]) => href
+      );
+      expect(hrefs.length).toBeGreaterThan(0);
+      for (const href of hrefs) {
+        expect(fs.existsSync(inPublic(href)), `${href} is linked but not in public/`).toBe(true);
+      }
+    });
+
+    it("ships the icons the manifest names", () => {
+      const manifest = JSON.parse(fs.readFileSync(inPublic("/site.webmanifest"), "utf8")) as {
+        readonly icons: readonly { readonly src: string }[];
+      };
+      expect(manifest.icons.length).toBeGreaterThan(0);
+      for (const icon of manifest.icons) {
+        expect(fs.existsSync(inPublic(icon.src)), `${icon.src} is in the manifest only`).toBe(true);
+      }
+    });
+
+    /* Requested from the root by browsers that were never told about it. */
+    it("ships a root favicon.ico even though nothing links to it", () => {
+      expect(fs.existsSync(inPublic("/favicon.ico"))).toBe(true);
+      expect(loadTemplate("head-icons")).not.toContain('href="/favicon.ico"');
+    });
   });
 
   it("names the views directory when a template is missing", () => {
