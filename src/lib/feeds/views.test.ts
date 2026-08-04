@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { EntryRow, FeedRow, FeedSummaryRow } from "./repository.js";
 import {
   formatPublishedAt,
+  renderEntryEditForm,
   renderEntryRow,
   renderFeedPage,
   renderFeedRow,
@@ -310,5 +311,115 @@ describe("the entry delete button", () => {
 
   it("is absent from the empty state", () => {
     expect(renderFeedPage(feed, [])).not.toContain("hx-delete");
+  });
+});
+
+describe("the entry edit button", () => {
+  it("fetches the row's own edit form", () => {
+    const html = renderEntryRow("tech", entry({ id: 42 })).html;
+    expect(html).toContain('hx-get="/feeds/tech/entries/42/edit"');
+  });
+
+  /* A row-level edit has no business re-rendering the other forty-nine rows. */
+  it("swaps the row itself rather than the whole list", () => {
+    const html = renderEntryRow("tech", entry()).html;
+    expect(html).toContain('hx-target="closest li"');
+    expect(html).toContain('hx-swap="outerHTML"');
+    expect(html).not.toContain('hx-get="/feeds/tech/entries/1/edit" hx-target="#entry-list"');
+  });
+
+  it("has a name, since it is an icon with no text", () => {
+    expect(renderEntryRow("tech", entry()).html).toContain('aria-label="Edit the entry A post"');
+  });
+
+  it("stands to the left of the trash button", () => {
+    const html = renderEntryRow("tech", entry()).html;
+    expect(html.indexOf("hx-get=")).toBeLessThan(html.indexOf("hx-delete="));
+  });
+
+  /* The title is stored, and it reaches a quoted attribute here. */
+  it("escapes a title that would otherwise break out of the label attribute", () => {
+    const html = renderEntryRow("tech", entry({ title: '" onmouseover="alert(1)' })).html;
+    expect(html).not.toContain('onmouseover="alert(1)"');
+    expect(html).toContain("&quot; onmouseover=&quot;alert(1)");
+  });
+
+  it("does not ask before opening, since nothing has changed yet", () => {
+    const html = renderEntryRow("tech", entry()).html;
+    expect(html.match(/hx-confirm=/g)).toHaveLength(1);
+  });
+
+  it("is absent from the empty state", () => {
+    expect(renderFeedPage(feed, [])).not.toContain("/edit");
+  });
+});
+
+describe("renderEntryEditForm", () => {
+  it("saves to the entry's own path and swaps the row back", () => {
+    const html = renderEntryEditForm("tech", entry({ id: 42 })).html;
+    expect(html).toContain('hx-patch="/feeds/tech/entries/42"');
+    expect(html).toContain('hx-target="closest li"');
+    expect(html).toContain('hx-swap="outerHTML"');
+  });
+
+  it("cancels by fetching the row back, rather than by discarding it locally", () => {
+    const html = renderEntryEditForm("tech", entry({ id: 42 })).html;
+    expect(html).toContain('hx-get="/feeds/tech/entries/42"');
+    expect(html).toContain("Cancel");
+  });
+
+  it("fills the fields with what is stored", () => {
+    const html = renderEntryEditForm("tech", entry({ description: "Notes" })).html;
+    expect(html).toContain('value="https://example.test/a"');
+    expect(html).toContain('value="A post"');
+    expect(html).toContain('value="Notes"');
+  });
+
+  it("leaves the description blank when the entry has none", () => {
+    expect(renderEntryEditForm("tech", entry()).html).toContain('name="description" value=""');
+  });
+
+  /*
+   * A `datetime-local` value carries no timezone, so prefilling it with the
+   * stored UTC instant would have the browser read it back as a local one and
+   * shift the entry by the reader's offset on every save. The date is shown as
+   * text instead, and the service reads a blank one as "leave it alone".
+   */
+  it("shows the published date rather than prefilling the picker with it", () => {
+    const html = renderEntryEditForm("tech", entry()).html;
+    expect(html).toContain("2026-01-15 08:30:05 UTC");
+    expect(html).not.toContain('type="datetime-local" value=');
+  });
+
+  it("shows a dash for an entry with no published date", () => {
+    expect(renderEntryEditForm("tech", entry({ published_at: null })).html).toContain("—");
+  });
+
+  /* Every stored value here lands in a quoted attribute. */
+  it("escapes a title that would otherwise break out of the value attribute", () => {
+    const html = renderEntryEditForm("tech", entry({ title: '" onmouseover="alert(1)' })).html;
+    expect(html).not.toContain('onmouseover="alert(1)"');
+    expect(html).toContain("&quot; onmouseover=&quot;alert(1)");
+  });
+
+  it("escapes a script payload in the description rather than emitting it", () => {
+    const html = renderEntryEditForm(
+      "tech",
+      entry({ description: "<script>alert(1)</script>" })
+    ).html;
+    expect(html).not.toContain("<script>alert(1)</script>");
+    expect(html).toContain("&lt;script&gt;");
+  });
+
+  /* The slug reaches an attribute as part of the URL, like every other value. */
+  it("escapes the slug it was handed", () => {
+    const html = renderEntryEditForm('" onmouseover="alert(1)', entry()).html;
+    expect(html).not.toContain('onmouseover="alert(1)"');
+  });
+
+  it("keeps an unsafe stored URL in the field as text, not as an href", () => {
+    const html = renderEntryEditForm("tech", entry({ url: "javascript:alert(1)" })).html;
+    expect(html).not.toContain('href="javascript:');
+    expect(html).toContain('value="javascript:alert(1)"');
   });
 });

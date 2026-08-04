@@ -82,6 +82,17 @@ function renderDeleteButton(
   return safe(render("delete-button", { path, target, label, confirm }));
 }
 
+/**
+ * The pencil button that swaps one row into its edit form.
+ *
+ * `label` names the entry and so carries a stored title. As with the trash
+ * button it is not wrapped in `safe()`: `aria-label` is a quoted attribute, and
+ * escaping is what that position needs.
+ */
+function renderEditButton(path: string, label: string): SafeHtml {
+  return safe(render("edit-button", { path, label }));
+}
+
 /** One row of the feed table. */
 export function renderFeedRow(row: FeedSummaryRow): SafeHtml {
   return safe(
@@ -155,18 +166,52 @@ export function formatPublishedAt(value: string | null): string {
  */
 export function renderEntryRow(slug: string, row: EntryRow): SafeHtml {
   const body = row.description ?? row.content ?? "";
+  const path = entryPath(slug, row);
   return safe(
     render("entry-row", {
       titleLink: renderLink(row.url, row.title),
       publishedAt: formatPublishedAt(row.published_at),
       author: row.author === null ? "" : ` · ${row.author}`,
       description: body,
+      editButton: renderEditButton(`${path}/edit`, `Edit the entry ${row.title}`),
       deleteButton: renderDeleteButton(
-        `${feedPagePath(slug)}/entries/${String(row.id)}`,
+        path,
         "#entry-list",
         `Delete the entry ${row.title}`,
         `Delete the entry "${row.title}"?`
       ),
+    })
+  );
+}
+
+/** Where one entry is edited, deleted and read back from. */
+function entryPath(slug: string, row: EntryRow): string {
+  return `${feedPagePath(slug)}/entries/${String(row.id)}`;
+}
+
+/**
+ * The row rewritten as the form that edits it.
+ *
+ * Every field is a stored value landing in a quoted `value` attribute, and none
+ * of them is wrapped in `safe()` — a title carrying a quote has to escape here
+ * exactly as it does in the row it replaces.
+ *
+ * The published date is shown as text rather than filled into the input. A
+ * `datetime-local` value has no timezone, so prefilling it with the stored UTC
+ * instant would have the browser read it back as a local one and shift the
+ * entry by the reader's offset on every save; the service reads a blank date as
+ * "leave it alone" for the same reason.
+ */
+export function renderEntryEditForm(slug: string, row: EntryRow): SafeHtml {
+  const path = entryPath(slug, row);
+  return safe(
+    render("entry-edit-form", {
+      path,
+      cancelPath: path,
+      url: row.url,
+      title: row.title,
+      description: row.description ?? "",
+      publishedAt: formatPublishedAt(row.published_at),
     })
   );
 }

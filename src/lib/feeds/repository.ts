@@ -86,6 +86,30 @@ export interface NewEntry {
   readonly publishedAt: string;
 }
 
+/**
+ * The columns a caller may change on an existing entry.
+ *
+ * Every field is optional and `undefined` means "leave this column alone",
+ * which is what makes an update a patch rather than a replacement: a caller
+ * that knows nothing about `author` cannot blank it by omission. `null` is
+ * therefore a value like any other, and clears the column.
+ *
+ * `feedId` is absent on purpose. An entry belongs to the feed that owns it for
+ * its whole life, and moving one would change the guid it is unique against.
+ */
+export interface EntryUpdate {
+  readonly guid?: string;
+  readonly url?: string;
+  readonly title?: string;
+  readonly description?: string | null;
+  readonly author?: string | null;
+  readonly categories?: string | null;
+  readonly enclosureUrl?: string | null;
+  readonly enclosureType?: string | null;
+  readonly enclosureLength?: number | null;
+  readonly publishedAt?: string | null;
+}
+
 /** How many entries a feed serves when the caller does not say otherwise. */
 export const DEFAULT_ENTRY_LIMIT = 50;
 
@@ -295,6 +319,89 @@ export async function deleteEntryById(
     feedId,
   ]);
   return (result.changes ?? 0) > 0;
+}
+
+/**
+ * One entry of one feed, or `undefined` when the pair names nothing.
+ *
+ * Scoped to the feed for the same reason {@link deleteEntryById} is: an id on
+ * its own would let a request aimed at one feed read another feed's row.
+ */
+export async function findEntryById(
+  db: Database,
+  feedId: number,
+  entryId: number
+): Promise<EntryRow | undefined> {
+  return db.instance.get<EntryRow>("SELECT * FROM entries WHERE id = ? AND feed_id = ?", [
+    entryId,
+    feedId,
+  ]);
+}
+
+/** Column each {@link EntryUpdate} field writes to, and the only ones an update may touch. */
+const ENTRY_UPDATE_COLUMNS: Readonly<Record<keyof EntryUpdate, string>> = {
+  guid: "guid",
+  url: "url",
+  title: "title",
+  description: "description",
+  author: "author",
+  categories: "categories",
+  enclosureUrl: "enclosure_url",
+  enclosureType: "enclosure_type",
+  enclosureLength: "enclosure_length",
+  publishedAt: "published_at",
+};
+
+/**
+ * Applies the given columns to one entry of one feed, returning the stored row
+ * or `undefined` when the pair named nothing.
+ *
+ * The SET list is built from the fields that are actually present, so a caller
+ * holding a partial view of the row cannot erase the rest of it. Column names
+ * come from {@link ENTRY_UPDATE_COLUMNS} rather than from the caller's keys, so
+ * nothing a request supplies ever reaches the SQL text.
+ *
+ * `updated_at` is written with the same expression the schema defaults it to,
+ * which keeps every row in one format rather than one shape from the default
+ * and another from this code.
+ */
+export async function updateEntry(
+  db: Database,
+  feedId: number,
+  entryId: number,
+  fields: EntryUpdate
+): Promise<EntryRow | undefined> {
+  const assignments: string[] = [];
+  const values: (string | number | null)[] = [];
+  for (const [field, column] of Object.entries(ENTRY_UPDATE_COLUMNS)) {
+    const value = fields[field as keyof EntryUpdate];
+    if (value === undefined) {
+      continue;
+    }
+    assignments.push(`${column} = ?`);
+    values.push(value);
+  }
+
+  const result = await db.instance
+    .run(
+      `UPDATE entries
+          SET ${["updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')", ...assignments].join(", ")}
+        WHERE id = ? AND feed_id = ?`,
+      [...values, entryId, feedId]
+    )
+    .catch((error: unknown) => {
+      // Only a guid change can trip the composite index, so a violation here
+      // names the guid this call was trying to write.
+      if (fields.guid !== undefined && isDuplicateGuidViolation(error)) {
+        throw new DuplicateGuidError(fields.guid);
+      }
+      throw error;
+    });
+
+  if ((result.changes ?? 0) === 0) {
+    return undefined;
+  }
+  return findEntryById(db, feedId, entryId);
 }
 
 /** Loads a feed and its entries in one call, or `undefined` if the slug is unknown. */

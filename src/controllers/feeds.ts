@@ -6,12 +6,16 @@ import {
   FeedNotFoundError,
   createEntryFromRequest,
   deleteEntryFromRequest,
+  findEntryFromRequest,
   stripFlagFromBody,
+  updateEntryFromRequest,
 } from "../lib/feeds/entry-service.js";
 import { findFeedWithEntries, toRssFeed } from "../lib/feeds/index.js";
 import { ValidationError } from "../lib/feeds/service.js";
 import { render } from "../lib/html/template.js";
 import {
+  renderEntryEditForm,
+  renderEntryRow,
   renderEntryRows,
   renderFeedPage,
   renderNotFoundPage,
@@ -88,6 +92,66 @@ function retargetToErrors(res: express.Response, status: number): express.Respon
   });
 }
 
+/**
+ * Turns a thrown error into an error-box fragment, the way `sendEntryError`
+ * does for the JSON API.
+ *
+ * The ones the service raises are caller mistakes and keep a real 4xx, which
+ * the page opts back into swapping. Anything else is a bug here, so it is
+ * logged and answered 500 without repeating itself onto the page.
+ */
+function sendFragmentError(
+  res: express.Response,
+  error: unknown,
+  action: string,
+  context: string
+): void {
+  if (error instanceof ValidationError) {
+    retargetToErrors(res, 400).send(renderValidationErrors(error.issues));
+    return;
+  }
+  if (error instanceof FeedNotFoundError) {
+    retargetToErrors(res, 404).send(
+      renderValidationErrors([{ field: "feed", message: "does not exist" }])
+    );
+    return;
+  }
+  if (error instanceof EntryNotFoundError) {
+    // Two people on the same page, or one person clicking twice: the entry is
+    // gone either way, and that is a 404 rather than a failure.
+    retargetToErrors(res, 404).send(
+      renderValidationErrors([{ field: "entry", message: "no longer exists" }])
+    );
+    return;
+  }
+  if (error instanceof DuplicateGuidError) {
+    retargetToErrors(res, 409).send(
+      renderValidationErrors([{ field: "guid", message: "is already used in this feed" }])
+    );
+    return;
+  }
+  console.error(context, error);
+  retargetToErrors(res, 500).send(
+    renderValidationErrors([{ field: "entry", message: `could not be ${action}` }])
+  );
+}
+
+/** The pair every row-level route addresses, or `undefined` when either is missing. */
+function entryTarget(
+  req: Request<Dependencies>
+): { readonly slug: string; readonly entryId: string } | undefined {
+  const slug = pathParam(req.params.slug);
+  const entryId = pathParam(req.params.entryId);
+  return slug === undefined || entryId === undefined ? undefined : { slug, entryId };
+}
+
+/** Answers a request that named no entry to act on. */
+function sendUnnamedEntryError(res: express.Response): void {
+  retargetToErrors(res, 404).send(
+    renderValidationErrors([{ field: "entry", message: "was not named in the request" }])
+  );
+}
+
 /** Creates an entry from the HTML form and returns the refreshed entry list. */
 export function createEntryFragmentHandler(
   req: Request<Dependencies>,
@@ -120,25 +184,11 @@ export function createEntryFragmentHandler(
         .set("Content-Type", HTML_CONTENT_TYPE)
         .send(`${renderEntryRows(slug, entries).html}\n${render("errors-cleared", {})}`);
     } catch (error) {
-      if (error instanceof ValidationError) {
-        retargetToErrors(res, 400).send(renderValidationErrors(error.issues));
-        return;
-      }
-      if (error instanceof FeedNotFoundError) {
-        retargetToErrors(res, 404).send(
-          renderValidationErrors([{ field: "feed", message: "does not exist" }])
-        );
-        return;
-      }
-      if (error instanceof DuplicateGuidError) {
-        retargetToErrors(res, 409).send(
-          renderValidationErrors([{ field: "guid", message: "is already used in this feed" }])
-        );
-        return;
-      }
-      console.error(`Failed to create an entry in feed "${slug}" from the form`, error);
-      retargetToErrors(res, 500).send(
-        renderValidationErrors([{ field: "entry", message: "could not be created" }])
+      sendFragmentError(
+        res,
+        error,
+        "created",
+        `Failed to create an entry in feed "${slug}" from the form`
       );
     }
   })();
@@ -150,14 +200,12 @@ export function deleteEntryFragmentHandler(
   res: express.Response
 ): void {
   void (async () => {
-    const slug = pathParam(req.params.slug);
-    const entryId = pathParam(req.params.entryId);
-    if (slug === undefined || entryId === undefined) {
-      retargetToErrors(res, 404).send(
-        renderValidationErrors([{ field: "entry", message: "was not named in the request" }])
-      );
+    const target = entryTarget(req);
+    if (target === undefined) {
+      sendUnnamedEntryError(res);
       return;
     }
+    const { slug, entryId } = target;
     try {
       await deleteEntryFromRequest(req.deps.db, slug, entryId);
       const loaded = await findFeedWithEntries(req.deps.db, slug);
@@ -167,23 +215,97 @@ export function deleteEntryFragmentHandler(
           `${renderEntryRows(slug, loaded?.entries ?? []).html}\n${render("errors-cleared", {})}`
         );
     } catch (error) {
-      if (error instanceof FeedNotFoundError) {
-        retargetToErrors(res, 404).send(
-          renderValidationErrors([{ field: "feed", message: "does not exist" }])
-        );
-        return;
-      }
-      if (error instanceof EntryNotFoundError) {
-        // Two people on the same page, or one person clicking twice: the entry
-        // is gone either way, and that is a 404 rather than a failure.
-        retargetToErrors(res, 404).send(
-          renderValidationErrors([{ field: "entry", message: "no longer exists" }])
-        );
-        return;
-      }
-      console.error(`Failed to delete entry "${entryId}" from feed "${slug}"`, error);
-      retargetToErrors(res, 500).send(
-        renderValidationErrors([{ field: "entry", message: "could not be deleted" }])
+      sendFragmentError(
+        res,
+        error,
+        "deleted",
+        `Failed to delete entry "${entryId}" from feed "${slug}"`
+      );
+    }
+  })();
+}
+
+/** Swaps one row into the form that edits it. */
+export function editEntryFragmentHandler(req: Request<Dependencies>, res: express.Response): void {
+  void (async () => {
+    const target = entryTarget(req);
+    if (target === undefined) {
+      sendUnnamedEntryError(res);
+      return;
+    }
+    const { slug, entryId } = target;
+    try {
+      const entry = await findEntryFromRequest(req.deps.db, slug, entryId);
+      res.set("Content-Type", HTML_CONTENT_TYPE).send(renderEntryEditForm(slug, entry).html);
+    } catch (error) {
+      sendFragmentError(
+        res,
+        error,
+        "edited",
+        `Failed to render the edit form for entry "${entryId}" of feed "${slug}"`
+      );
+    }
+  })();
+}
+
+/**
+ * One row on its own, which is how Cancel puts back what it found.
+ *
+ * The row is re-read rather than remembered by the form, so a cancelled edit
+ * shows what is stored now and not what was stored when the form opened.
+ */
+export function entryRowFragmentHandler(req: Request<Dependencies>, res: express.Response): void {
+  void (async () => {
+    const target = entryTarget(req);
+    if (target === undefined) {
+      sendUnnamedEntryError(res);
+      return;
+    }
+    const { slug, entryId } = target;
+    try {
+      const entry = await findEntryFromRequest(req.deps.db, slug, entryId);
+      res.set("Content-Type", HTML_CONTENT_TYPE).send(renderEntryRow(slug, entry).html);
+    } catch (error) {
+      sendFragmentError(
+        res,
+        error,
+        "shown",
+        `Failed to render entry "${entryId}" of feed "${slug}"`
+      );
+    }
+  })();
+}
+
+/**
+ * Saves the edit form and returns the row it becomes.
+ *
+ * Only the edited row is sent back, so a save does not re-render the other
+ * entries. An edit that changes the publication date therefore leaves the row
+ * where it was until the page is loaded again, which is a smaller surprise than
+ * having a row jump out from under the cursor that saved it.
+ */
+export function updateEntryFragmentHandler(
+  req: Request<Dependencies>,
+  res: express.Response
+): void {
+  void (async () => {
+    const target = entryTarget(req);
+    if (target === undefined) {
+      sendUnnamedEntryError(res);
+      return;
+    }
+    const { slug, entryId } = target;
+    try {
+      const entry = await updateEntryFromRequest(req.deps.db, slug, entryId, req.body);
+      res
+        .set("Content-Type", HTML_CONTENT_TYPE)
+        .send(`${renderEntryRow(slug, entry).html}\n${render("errors-cleared", {})}`);
+    } catch (error) {
+      sendFragmentError(
+        res,
+        error,
+        "saved",
+        `Failed to save entry "${entryId}" of feed "${slug}" from the form`
       );
     }
   })();
@@ -203,6 +325,9 @@ const FeedsController: Controller<Dependencies> = {
     rssRoute("/:slug.xml", feedChannel),
     { path: "/:slug", method: "GET", handler: feedPageHandler },
     { path: "/:slug/entries", method: "POST", handler: createEntryFragmentHandler },
+    { path: "/:slug/entries/:entryId/edit", method: "GET", handler: editEntryFragmentHandler },
+    { path: "/:slug/entries/:entryId", method: "GET", handler: entryRowFragmentHandler },
+    { path: "/:slug/entries/:entryId", method: "PATCH", handler: updateEntryFragmentHandler },
     { path: "/:slug/entries/:entryId", method: "DELETE", handler: deleteEntryFragmentHandler },
   ],
 };

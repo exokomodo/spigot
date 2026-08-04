@@ -4,17 +4,20 @@ import { SAFE_PROTOCOL_LIST, isSafeHttpUrl } from "../html/url.js";
 import {
   DuplicateGuidError,
   EntryRow,
+  EntryUpdate,
   FeedRow,
   NewEntry,
   createEntry,
   deleteEntryById,
+  findEntryById,
   findFeedBySlug,
+  updateEntry,
 } from "./repository.js";
 import { FeedNotFoundError, ValidationError, ValidationIssue } from "./service.js";
 
 /**
- * Validation and creation for entries, shared by the JSON API and the HTML
- * form, exactly as `service.ts` is for feeds.
+ * Validation, creation and editing for entries, shared by the JSON API and the
+ * HTML form, exactly as `service.ts` is for feeds.
  */
 
 export const ENTRY_TITLE_MAX_LENGTH = 500;
@@ -25,6 +28,24 @@ export const ENTRY_AUTHOR_MAX_LENGTH = 200;
 
 function readString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
+}
+
+/** An untrusted body as something with keys, so a non-object simply has none. */
+function readFields(body: unknown): Record<string, unknown> {
+  return typeof body === "object" && body !== null ? (body as Record<string, unknown>) : {};
+}
+
+/** The length rule every free-text column shares, reported against its own field name. */
+function validateMaxLength(
+  field: string,
+  value: string,
+  max: number,
+  issues: ValidationIssue[]
+): string {
+  if (value.length > max) {
+    issues.push({ field, message: `must be at most ${String(max)} characters` });
+  }
+  return value;
 }
 
 function validateEntryUrl(
@@ -160,8 +181,7 @@ export function parseNewEntry(
   body: unknown,
   options: NewEntryOptions = {}
 ): NewEntry {
-  const fields: Record<string, unknown> =
-    typeof body === "object" && body !== null ? (body as Record<string, unknown>) : {};
+  const fields = readFields(body);
   const now = options.now ?? new Date();
 
   const issues: ValidationIssue[] = [];
@@ -177,29 +197,26 @@ export function parseNewEntry(
   // and one carrying a query the entry itself does not have would be a lie that
   // also changes which entries count as duplicates.
   const rawGuid = readString(fields.guid)?.trim() ?? "";
-  const guid = rawGuid.length > 0 ? rawGuid : url;
-  if (guid.length > ENTRY_GUID_MAX_LENGTH) {
-    issues.push({
-      field: "guid",
-      message: `must be at most ${String(ENTRY_GUID_MAX_LENGTH)} characters`,
-    });
-  }
+  const guid = validateMaxLength(
+    "guid",
+    rawGuid.length > 0 ? rawGuid : url,
+    ENTRY_GUID_MAX_LENGTH,
+    issues
+  );
 
-  const description = readString(fields.description)?.trim() ?? "";
-  if (description.length > ENTRY_DESCRIPTION_MAX_LENGTH) {
-    issues.push({
-      field: "description",
-      message: `must be at most ${String(ENTRY_DESCRIPTION_MAX_LENGTH)} characters`,
-    });
-  }
+  const description = validateMaxLength(
+    "description",
+    readString(fields.description)?.trim() ?? "",
+    ENTRY_DESCRIPTION_MAX_LENGTH,
+    issues
+  );
 
-  const author = readString(fields.author)?.trim() ?? "";
-  if (author.length > ENTRY_AUTHOR_MAX_LENGTH) {
-    issues.push({
-      field: "author",
-      message: `must be at most ${String(ENTRY_AUTHOR_MAX_LENGTH)} characters`,
-    });
-  }
+  const author = validateMaxLength(
+    "author",
+    readString(fields.author)?.trim() ?? "",
+    ENTRY_AUTHOR_MAX_LENGTH,
+    issues
+  );
 
   const categories = readString(fields.categories)?.trim() ?? "";
   const enclosure = validateEnclosure(fields, issues);
@@ -338,6 +355,166 @@ export async function createEntryFromRequest(
     throw new FeedNotFoundError(slug);
   }
   return { feed, entry: await createEntry(db, parseNewEntry(feed, body, options)) };
+}
+
+/** The three enclosure keys, which are validated together or not at all. */
+const ENCLOSURE_FIELDS = ["enclosureUrl", "enclosureType", "enclosureLength"] as const;
+
+/** {@link EntryUpdate} while it is still being assembled. */
+type MutableEntryUpdate = { -readonly [Field in keyof EntryUpdate]: EntryUpdate[Field] };
+
+/** Text that clears its column when blank, so an emptied form field empties the row. */
+function clearWhenBlank(value: string): string | null {
+  return value.length > 0 ? value : null;
+}
+
+/**
+ * Validates an untrusted body into the columns it asks to change.
+ *
+ * Only keys the body actually carries are read, which is what makes this a
+ * patch: the HTML form knows about four fields, and a replacement built from it
+ * would blank the author, categories and enclosure of every entry it saved.
+ *
+ * `existing` is needed rather than merely the feed, because whether the guid
+ * moves with the url depends on the row already stored.
+ */
+export function parseEntryUpdate(
+  existing: EntryRow,
+  body: unknown,
+  now: Date = new Date()
+): EntryUpdate {
+  const fields = readFields(body);
+  const issues: ValidationIssue[] = [];
+  const update: MutableEntryUpdate = {};
+
+  if (Object.hasOwn(fields, "url")) {
+    // Never stripped, deliberately. Stripping is a choice about a URL arriving
+    // from somewhere else; a url typed into the edit form is already the one the
+    // author means, and silently shortening what they just typed would be the
+    // surprise. An entry stored with a query it should not have is fixed by
+    // editing that query out.
+    const url = validateEntryUrl(readString(fields.url), issues, false);
+    update.url = url;
+    // A permalink guid *is* the entry's url — that is what `isPermaLink` claims
+    // and what `parseNewEntry` stores — so moving the url has to move the guid
+    // with it, or the feed goes on publishing a guid that resolves nowhere. An
+    // entry with a guid of its own keeps it: readers have already filed the
+    // item under that guid, and changing it republishes the item as a new one.
+    if (existing.guid_is_permalink === 1) {
+      update.guid = validateMaxLength("guid", url, ENTRY_GUID_MAX_LENGTH, issues);
+    }
+  }
+
+  if (Object.hasOwn(fields, "title")) {
+    update.title = validateEntryTitle(readString(fields.title), issues);
+  }
+
+  if (Object.hasOwn(fields, "description")) {
+    update.description = clearWhenBlank(
+      validateMaxLength(
+        "description",
+        readString(fields.description)?.trim() ?? "",
+        ENTRY_DESCRIPTION_MAX_LENGTH,
+        issues
+      )
+    );
+  }
+
+  if (Object.hasOwn(fields, "author")) {
+    update.author = clearWhenBlank(
+      validateMaxLength(
+        "author",
+        readString(fields.author)?.trim() ?? "",
+        ENTRY_AUTHOR_MAX_LENGTH,
+        issues
+      )
+    );
+  }
+
+  if (Object.hasOwn(fields, "categories")) {
+    update.categories = clearWhenBlank(readString(fields.categories)?.trim() ?? "");
+  }
+
+  // A blank date leaves the stored one alone rather than clearing it or
+  // defaulting to now, which is what `parseNewEntry` does with the same value.
+  // The edit form's date field is empty until someone picks a date, because a
+  // `datetime-local` input carries no zone: prefilling it with the stored UTC
+  // instant would have the browser read it back as a local one and shift the
+  // entry by the reader's offset every time it was saved.
+  const publishedAt = readString(fields.publishedAt)?.trim() ?? "";
+  if (publishedAt.length > 0) {
+    update.publishedAt = validatePublishedAt(publishedAt, issues, now);
+  }
+
+  // All three parts or none, the same rule the mapper reads them back under —
+  // so naming any one of them rewrites the set, and naming them all blank
+  // removes the enclosure.
+  if (ENCLOSURE_FIELDS.some((field) => Object.hasOwn(fields, field))) {
+    const enclosure = validateEnclosure(fields, issues);
+    update.enclosureUrl = enclosure.enclosureUrl ?? null;
+    update.enclosureType = enclosure.enclosureType ?? null;
+    update.enclosureLength = enclosure.enclosureLength ?? null;
+  }
+
+  if (issues.length > 0) {
+    throw new ValidationError(issues);
+  }
+  return update;
+}
+
+/**
+ * Loads one entry of the feed named by `slug`.
+ *
+ * Throws `FeedNotFoundError` or `EntryNotFoundError`, which the controllers
+ * both answer 404. Resolving the feed first and scoping the lookup to it means
+ * an id belonging to another feed is a miss rather than a peek at that feed.
+ */
+export async function findEntryFromRequest(
+  db: Database,
+  slug: string,
+  rawEntryId: string
+): Promise<EntryRow> {
+  const feed = await findFeedBySlug(db, slug);
+  if (feed === undefined) {
+    throw new FeedNotFoundError(slug);
+  }
+  const entryId = parseEntryId(rawEntryId);
+  const entry = entryId === undefined ? undefined : await findEntryById(db, feed.id, entryId);
+  if (entry === undefined) {
+    throw new EntryNotFoundError(rawEntryId);
+  }
+  return entry;
+}
+
+/**
+ * Applies the fields a request carries to one entry, returning the stored row.
+ *
+ * Throws `FeedNotFoundError`, `EntryNotFoundError`, `ValidationError` or
+ * `DuplicateGuidError`, which the controllers turn into 404, 404, 400 and 409.
+ *
+ * The row is read before it is written because the update is validated against
+ * it — the guid rule in {@link parseEntryUpdate} needs to know what is stored.
+ * The write is still scoped to the feed rather than trusting that read, so a
+ * row deleted in between is a miss and not an insert.
+ */
+export async function updateEntryFromRequest(
+  db: Database,
+  slug: string,
+  rawEntryId: string,
+  body: unknown,
+  now: Date = new Date()
+): Promise<EntryRow> {
+  const existing = await findEntryFromRequest(db, slug, rawEntryId);
+  const updated = await updateEntry(
+    db,
+    existing.feed_id,
+    existing.id,
+    parseEntryUpdate(existing, body, now)
+  );
+  if (updated === undefined) {
+    throw new EntryNotFoundError(rawEntryId);
+  }
+  return updated;
 }
 
 export { DuplicateGuidError, FeedNotFoundError };

@@ -6,12 +6,20 @@ import {
   FeedNotFoundError,
   createEntryFromRequest,
   deleteEntryFromRequest,
+  findEntryFromRequest,
   parseEntryId,
   parseNewEntry,
   parseStripFlag,
   stripFlagFromBody,
+  updateEntryFromRequest,
 } from "./entry-service.js";
-import { DuplicateGuidError, FeedRow, createFeed, findEntriesByFeedId } from "./repository.js";
+import {
+  DuplicateGuidError,
+  FeedRow,
+  createFeed,
+  findEntriesByFeedId,
+  findEntryById,
+} from "./repository.js";
 import { ValidationError } from "./service.js";
 
 const feed: FeedRow = {
@@ -504,5 +512,339 @@ describe("deleteEntryFromRequest", () => {
     await expect(deleteEntryFromRequest(db, "tech", String(entry.id))).rejects.toBeInstanceOf(
       EntryNotFoundError
     );
+  });
+});
+
+describe("findEntryFromRequest", () => {
+  const databases: Database[] = [];
+
+  const open = async (): Promise<Database> => {
+    const db = await loadDatabase(":memory:");
+    databases.push(db);
+    return db;
+  };
+
+  afterEach(async () => {
+    await Promise.all(databases.splice(0).map((db) => db.instance.close()));
+  });
+
+  const valid = { url: "https://example.test/a", title: "A post" };
+
+  it("returns the entry", async () => {
+    const db = await open();
+    await createFeed(db, { slug: "tech", title: "Tech" });
+    const { entry } = await createEntryFromRequest(db, "tech", valid);
+
+    expect(await findEntryFromRequest(db, "tech", String(entry.id))).toMatchObject({
+      id: entry.id,
+      title: "A post",
+    });
+  });
+
+  it("raises FeedNotFoundError when the slug names nothing", async () => {
+    const db = await open();
+    await expect(findEntryFromRequest(db, "nope", "1")).rejects.toBeInstanceOf(FeedNotFoundError);
+  });
+
+  it("raises EntryNotFoundError rather than querying on an id that is not one", async () => {
+    const db = await open();
+    await createFeed(db, { slug: "tech", title: "Tech" });
+    await expect(findEntryFromRequest(db, "tech", "banana")).rejects.toBeInstanceOf(
+      EntryNotFoundError
+    );
+  });
+
+  it("will not read an entry through another feed's slug", async () => {
+    const db = await open();
+    await createFeed(db, { slug: "one", title: "One" });
+    await createFeed(db, { slug: "two", title: "Two" });
+    const { entry } = await createEntryFromRequest(db, "two", valid);
+
+    await expect(findEntryFromRequest(db, "one", String(entry.id))).rejects.toBeInstanceOf(
+      EntryNotFoundError
+    );
+  });
+});
+
+describe("updateEntryFromRequest", () => {
+  const databases: Database[] = [];
+
+  const open = async (): Promise<Database> => {
+    const db = await loadDatabase(":memory:");
+    databases.push(db);
+    return db;
+  };
+
+  afterEach(async () => {
+    await Promise.all(databases.splice(0).map((db) => db.instance.close()));
+  });
+
+  const valid = { url: "https://example.test/a", title: "A post" };
+
+  /** A feed holding one entry, returned with the id the tests address it by. */
+  const seed = async (
+    db: Database,
+    body: Record<string, unknown> = valid
+  ): Promise<{ readonly feedId: number; readonly entryId: string }> => {
+    const feed = await createFeed(db, { slug: "tech", title: "Tech" });
+    const { entry } = await createEntryFromRequest(db, "tech", body, { now: NOW });
+    return { feedId: feed.id, entryId: String(entry.id) };
+  };
+
+  it("applies the fields the body carries", async () => {
+    const db = await open();
+    const { entryId } = await seed(db);
+
+    const updated = await updateEntryFromRequest(db, "tech", entryId, { title: "Renamed" }, NOW);
+
+    expect(updated.title).toBe("Renamed");
+  });
+
+  it("trims what it stores, the way creating one does", async () => {
+    const db = await open();
+    const { entryId } = await seed(db);
+
+    const updated = await updateEntryFromRequest(
+      db,
+      "tech",
+      entryId,
+      { title: "  Renamed  " },
+      NOW
+    );
+
+    expect(updated.title).toBe("Renamed");
+  });
+
+  /*
+   * The reason this is a PATCH and not a PUT. The HTML form carries four
+   * fields, and a replacement built from it would blank everything else on the
+   * row — including columns the form has never heard of.
+   */
+  it("leaves fields the body does not mention alone", async () => {
+    const db = await open();
+    const { entryId } = await seed(db, {
+      ...valid,
+      author: "Ada",
+      categories: "rust,web",
+      enclosureUrl: "https://example.test/a.mp3",
+      enclosureType: "audio/mpeg",
+      enclosureLength: 1234,
+    });
+
+    const updated = await updateEntryFromRequest(db, "tech", entryId, { title: "Renamed" }, NOW);
+
+    expect(updated).toMatchObject({
+      title: "Renamed",
+      author: "Ada",
+      categories: "rust,web",
+      enclosure_url: "https://example.test/a.mp3",
+      enclosure_length: 1234,
+      published_at: "2026-08-03T12:00:00.000Z",
+    });
+  });
+
+  it("clears a field the body sends blank", async () => {
+    const db = await open();
+    const { entryId } = await seed(db, { ...valid, description: "Notes" });
+
+    const updated = await updateEntryFromRequest(db, "tech", entryId, { description: "" }, NOW);
+
+    expect(updated.description).toBeNull();
+  });
+
+  describe("the guid", () => {
+    /* The subtle part: a permalink guid *is* the url, so it has to move with it. */
+    it("follows the url when the entry's guid is its url", async () => {
+      const db = await open();
+      const { entryId } = await seed(db);
+
+      const updated = await updateEntryFromRequest(
+        db,
+        "tech",
+        entryId,
+        { url: "https://example.test/moved" },
+        NOW
+      );
+
+      expect(updated.guid).toBe("https://example.test/moved");
+      expect(updated.guid_is_permalink).toBe(1);
+    });
+
+    it("stays put when the entry has a guid of its own", async () => {
+      const db = await open();
+      const { entryId } = await seed(db, { ...valid, guid: "ep-42" });
+
+      const updated = await updateEntryFromRequest(
+        db,
+        "tech",
+        entryId,
+        { url: "https://example.test/moved" },
+        NOW
+      );
+
+      expect(updated.url).toBe("https://example.test/moved");
+      expect(updated.guid).toBe("ep-42");
+      expect(updated.guid_is_permalink).toBe(0);
+    });
+
+    it("does not move when the url is not being changed", async () => {
+      const db = await open();
+      const { entryId } = await seed(db);
+
+      const updated = await updateEntryFromRequest(db, "tech", entryId, { title: "Renamed" }, NOW);
+
+      expect(updated.guid).toBe("https://example.test/a");
+    });
+
+    /* A permalink rename can collide with a sibling, and that is a 409. */
+    it("raises DuplicateGuidError when the new url is another entry's guid", async () => {
+      const db = await open();
+      const { entryId } = await seed(db);
+      await createEntryFromRequest(
+        db,
+        "tech",
+        { ...valid, url: "https://example.test/b" },
+        { now: NOW }
+      );
+
+      await expect(
+        updateEntryFromRequest(db, "tech", entryId, { url: "https://example.test/b" }, NOW)
+      ).rejects.toBeInstanceOf(DuplicateGuidError);
+    });
+
+    it("cannot be set directly, since it is the entry's identity to a reader", async () => {
+      const db = await open();
+      const { entryId } = await seed(db, { ...valid, guid: "ep-42" });
+
+      const updated = await updateEntryFromRequest(db, "tech", entryId, { guid: "ep-43" }, NOW);
+
+      expect(updated.guid).toBe("ep-42");
+    });
+  });
+
+  describe("publishedAt", () => {
+    it("accepts a new date and normalizes it", async () => {
+      const db = await open();
+      const { entryId } = await seed(db);
+
+      const updated = await updateEntryFromRequest(
+        db,
+        "tech",
+        entryId,
+        { publishedAt: "2026-01-15" },
+        NOW
+      );
+
+      expect(updated.published_at).toBe("2026-01-15T00:00:00.000Z");
+    });
+
+    /*
+     * The edit form's date input is empty until someone picks a date, because a
+     * `datetime-local` value has no timezone to prefill it with. A blank one
+     * therefore means "unchanged" and not "now" or "never".
+     */
+    it("keeps the stored date when the body sends a blank one", async () => {
+      const db = await open();
+      const { entryId } = await seed(db);
+
+      const updated = await updateEntryFromRequest(
+        db,
+        "tech",
+        entryId,
+        { title: "Renamed", publishedAt: "  " },
+        NOW
+      );
+
+      expect(updated.published_at).toBe("2026-08-03T12:00:00.000Z");
+    });
+
+    it("rejects an unparseable date rather than letting it reach the database", async () => {
+      const db = await open();
+      const { entryId } = await seed(db);
+
+      await expect(
+        updateEntryFromRequest(db, "tech", entryId, { publishedAt: "not-a-date" }, NOW)
+      ).rejects.toBeInstanceOf(ValidationError);
+    });
+  });
+
+  describe("validation", () => {
+    it("rejects a url that is not one a browser should follow", async () => {
+      const db = await open();
+      const { entryId } = await seed(db);
+
+      await expect(
+        updateEntryFromRequest(db, "tech", entryId, { url: "javascript:alert(1)" }, NOW)
+      ).rejects.toBeInstanceOf(ValidationError);
+    });
+
+    it("rejects a title emptied to nothing", async () => {
+      const db = await open();
+      const { entryId } = await seed(db);
+
+      await expect(
+        updateEntryFromRequest(db, "tech", entryId, { title: "   " }, NOW)
+      ).rejects.toBeInstanceOf(ValidationError);
+    });
+
+    it("stores nothing when the body is rejected", async () => {
+      const db = await open();
+      const { feedId, entryId } = await seed(db);
+
+      await expect(
+        updateEntryFromRequest(db, "tech", entryId, { title: "Renamed", url: "/relative" }, NOW)
+      ).rejects.toBeInstanceOf(ValidationError);
+      expect(await findEntryById(db, feedId, Number(entryId))).toMatchObject({ title: "A post" });
+    });
+
+    it("names every problem at once", async () => {
+      const db = await open();
+      const { entryId } = await seed(db);
+
+      await updateEntryFromRequest(db, "tech", entryId, { url: "nope", title: "" }, NOW).catch(
+        (error: unknown) => {
+          expect(error).toBeInstanceOf(ValidationError);
+          expect((error as ValidationError).issues.map((issue) => issue.field)).toEqual([
+            "url",
+            "title",
+          ]);
+        }
+      );
+    });
+
+    it("tolerates a body that is not an object, and changes nothing", async () => {
+      const db = await open();
+      const { entryId } = await seed(db);
+
+      expect((await updateEntryFromRequest(db, "tech", entryId, null, NOW)).title).toBe("A post");
+    });
+  });
+
+  it("raises FeedNotFoundError when the slug names nothing", async () => {
+    const db = await open();
+    await expect(
+      updateEntryFromRequest(db, "nope", "1", { title: "x" }, NOW)
+    ).rejects.toBeInstanceOf(FeedNotFoundError);
+  });
+
+  it("raises EntryNotFoundError when the id names nothing in the feed", async () => {
+    const db = await open();
+    await createFeed(db, { slug: "tech", title: "Tech" });
+    await expect(
+      updateEntryFromRequest(db, "tech", "999", { title: "x" }, NOW)
+    ).rejects.toBeInstanceOf(EntryNotFoundError);
+  });
+
+  /* The reason the feed is resolved before the write rather than after. */
+  it("will not edit an entry through another feed's slug", async () => {
+    const db = await open();
+    await createFeed(db, { slug: "one", title: "One" });
+    const two = await createFeed(db, { slug: "two", title: "Two" });
+    const { entry } = await createEntryFromRequest(db, "two", valid, { now: NOW });
+
+    await expect(
+      updateEntryFromRequest(db, "one", String(entry.id), { title: "Renamed" }, NOW)
+    ).rejects.toBeInstanceOf(EntryNotFoundError);
+    expect(await findEntryById(db, two.id, entry.id)).toMatchObject({ title: "A post" });
   });
 });

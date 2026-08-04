@@ -7,6 +7,8 @@ import {
   createFeed,
   deleteEntryById,
   findEntriesByFeedId,
+  findEntryById,
+  updateEntry,
 } from "./repository.js";
 
 const databases: Database[] = [];
@@ -115,6 +117,138 @@ describe("createEntry", () => {
     );
     const entries = await findEntriesByFeedId(db, feed.id);
     expect(entries.map((row) => row.guid)).toEqual(["new", "old"]);
+  });
+});
+
+describe("findEntryById", () => {
+  it("returns the row for an id in the feed", async () => {
+    const db = await boot();
+    const feed = await createFeed(db, { slug: "tech", title: "Tech" });
+    const entry = await createEntry(db, newEntry(feed.id));
+
+    expect(await findEntryById(db, feed.id, entry.id)).toMatchObject({ id: entry.id, guid: "g1" });
+  });
+
+  it("returns undefined for an id that names nothing", async () => {
+    const db = await boot();
+    const feed = await createFeed(db, { slug: "tech", title: "Tech" });
+    expect(await findEntryById(db, feed.id, 999)).toBeUndefined();
+  });
+
+  /* Ids are unique table-wide, so the feed has to constrain the read too. */
+  it("refuses an id that belongs to a different feed", async () => {
+    const db = await boot();
+    const one = await createFeed(db, { slug: "one", title: "One" });
+    const two = await createFeed(db, { slug: "two", title: "Two" });
+    const entry = await createEntry(db, newEntry(two.id));
+
+    expect(await findEntryById(db, one.id, entry.id)).toBeUndefined();
+  });
+});
+
+describe("updateEntry", () => {
+  it("writes the named columns and returns the stored row", async () => {
+    const db = await boot();
+    const feed = await createFeed(db, { slug: "tech", title: "Tech" });
+    const entry = await createEntry(db, newEntry(feed.id));
+
+    const updated = await updateEntry(db, feed.id, entry.id, {
+      title: "Renamed",
+      url: "https://example.test/b",
+    });
+
+    expect(updated).toMatchObject({ title: "Renamed", url: "https://example.test/b" });
+  });
+
+  /* The whole point of a patch: a caller holding four fields has to leave the rest. */
+  it("leaves columns the caller did not name alone", async () => {
+    const db = await boot();
+    const feed = await createFeed(db, { slug: "tech", title: "Tech" });
+    const entry = await createEntry(
+      db,
+      newEntry(feed.id, {
+        author: "Ada",
+        categories: "rust,web",
+        enclosureUrl: "https://example.test/a.mp3",
+        enclosureType: "audio/mpeg",
+        enclosureLength: 1234,
+      })
+    );
+
+    const updated = await updateEntry(db, feed.id, entry.id, { title: "Renamed" });
+
+    expect(updated).toMatchObject({
+      title: "Renamed",
+      author: "Ada",
+      categories: "rust,web",
+      enclosure_url: "https://example.test/a.mp3",
+      enclosure_length: 1234,
+    });
+  });
+
+  it("clears a column named with null", async () => {
+    const db = await boot();
+    const feed = await createFeed(db, { slug: "tech", title: "Tech" });
+    const entry = await createEntry(db, newEntry(feed.id, { author: "Ada" }));
+
+    expect(await updateEntry(db, feed.id, entry.id, { author: null })).toMatchObject({
+      author: null,
+    });
+  });
+
+  it("moves updated_at forward without touching created_at", async () => {
+    const db = await boot();
+    const feed = await createFeed(db, { slug: "tech", title: "Tech" });
+    const entry = await createEntry(db, newEntry(feed.id));
+    await db.instance.run("UPDATE entries SET updated_at = ? WHERE id = ?", [
+      "2020-01-01T00:00:00.000Z",
+      entry.id,
+    ]);
+
+    const updated = await updateEntry(db, feed.id, entry.id, { title: "Renamed" });
+
+    expect(updated?.updated_at).not.toBe("2020-01-01T00:00:00.000Z");
+    expect(updated?.created_at).toBe(entry.created_at);
+  });
+
+  it("reports undefined for an id that names nothing", async () => {
+    const db = await boot();
+    const feed = await createFeed(db, { slug: "tech", title: "Tech" });
+    expect(await updateEntry(db, feed.id, 999, { title: "Renamed" })).toBeUndefined();
+  });
+
+  /* The same defensive scoping as deleteEntryById, for the same reason. */
+  it("refuses an id that belongs to a different feed, and changes nothing", async () => {
+    const db = await boot();
+    const one = await createFeed(db, { slug: "one", title: "One" });
+    const two = await createFeed(db, { slug: "two", title: "Two" });
+    const entry = await createEntry(db, newEntry(two.id));
+
+    expect(await updateEntry(db, one.id, entry.id, { title: "Renamed" })).toBeUndefined();
+    expect(await findEntryById(db, two.id, entry.id)).toMatchObject({ title: "A post" });
+  });
+
+  it("raises DuplicateGuidError when the new guid is already used in the feed", async () => {
+    const db = await boot();
+    const feed = await createFeed(db, { slug: "tech", title: "Tech" });
+    await createEntry(db, newEntry(feed.id, { guid: "taken" }));
+    const entry = await createEntry(db, newEntry(feed.id, { guid: "mine" }));
+
+    await expect(updateEntry(db, feed.id, entry.id, { guid: "taken" })).rejects.toBeInstanceOf(
+      DuplicateGuidError
+    );
+  });
+
+  it("allows a guid already used in another feed", async () => {
+    const db = await boot();
+    const one = await createFeed(db, { slug: "one", title: "One" });
+    const two = await createFeed(db, { slug: "two", title: "Two" });
+    await createEntry(db, newEntry(one.id, { guid: "shared" }));
+    const entry = await createEntry(db, newEntry(two.id, { guid: "mine" }));
+
+    expect(await updateEntry(db, two.id, entry.id, { guid: "shared" })).toMatchObject({
+      guid: "shared",
+    });
   });
 });
 

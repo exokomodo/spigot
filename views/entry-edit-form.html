@@ -1,0 +1,47 @@
+<li class="entry entry-editing">
+  <!--
+    The form replaces the row it came from and its response replaces it back, so
+    every swap here is `outerHTML` against `closest li`. Nothing else on the
+    page moves, which is the point: the other entries are not being edited.
+  -->
+  <form
+    class="entry-edit"
+    hx-patch="{{path}}"
+    hx-target="closest li"
+    hx-swap="outerHTML"
+    hx-disabled-elt="find button"
+  >
+    <label>
+      URL
+      <input name="url" type="url" value="{{url}}" required />
+    </label>
+    <label>
+      Title
+      <input name="title" value="{{title}}" required />
+    </label>
+    <label>
+      Published
+      <input name="publishedAt" type="datetime-local" />
+    </label>
+    <label>
+      Description
+      <input name="description" value="{{description}}" />
+    </label>
+    <div class="entry-edit-actions">
+      <button type="submit">Save</button>
+      <button
+        type="button"
+        hx-get="{{cancelPath}}"
+        hx-target="closest li"
+        hx-swap="outerHTML"
+        hx-disabled-elt="this"
+      >
+        Cancel
+      </button>
+    </div>
+    <p class="form-hint">
+      Published {{publishedAt}}. Pick a date only to change it; leaving it blank keeps the one
+      above.
+    </p>
+  </form>
+</li>
