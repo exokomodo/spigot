@@ -26,12 +26,52 @@
 export const TRACKING_PARAMETER_PREFIX = "utm_";
 
 /**
- * Trackers with no shared prefix, matched whole.
+ * Trackers with no shared prefix, matched whole and case-insensitively.
  *
- * `si` and `is` are the ids YouTube attaches to a link copied out of its share
- * sheet; they identify who did the sharing, not which video.
+ * Every name here is minted by an ad, email or share platform and means nothing
+ * to the page being linked to, which is what makes a blocklist workable: each
+ * one can be dropped without knowing anything about the site. A parameter that
+ * some site might legitimately use — `ref`, `tag`, `source`, `id` — is
+ * deliberately absent, however often it also carries tracking, because removing
+ * it can land the reader somewhere other than where the link pointed.
  */
-export const TRACKING_PARAMETER_NAMES: ReadonlySet<string> = new Set(["si", "is"]);
+export const TRACKING_PARAMETER_NAMES: ReadonlySet<string> = new Set([
+  // Share-sheet ids. YouTube's `si` and `is` say who passed the link along, not
+  // which video it is; Spotify uses `si` the same way.
+  "si",
+  "is",
+  // Ad click ids. Each is stamped on by the ad network at click time.
+  "gclid",
+  "gclsrc",
+  "dclid",
+  "wbraid",
+  "gbraid",
+  "fbclid",
+  "igshid",
+  "msclkid",
+  "twclid",
+  "ttclid",
+  "li_fat_id",
+  "rdt_cid",
+  "epik",
+  "yclid",
+  "_openstat",
+  "s_kwcid",
+  "irclickid",
+  "cjevent",
+  // Email platforms, stamped per recipient — these identify the reader.
+  "mc_cid",
+  "mc_eid",
+  "_hsenc",
+  "_hsmi",
+  "hsctatracking",
+  "mkt_tok",
+  "vero_id",
+  "vero_conv",
+  "oly_anon_id",
+  "oly_enc_id",
+  "ck_subscriber_id",
+]);
 
 /**
  * Reads a query-segment name back into the text that was written.

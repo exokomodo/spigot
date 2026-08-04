@@ -7,9 +7,33 @@ import {
 import { isSafeHttpUrl } from "./url.js";
 
 describe("the tracker list", () => {
-  it("is the utm_ prefix and YouTube's share ids", () => {
+  it("is the utm_ prefix plus share ids and click ids", () => {
     expect(TRACKING_PARAMETER_PREFIX).toBe("utm_");
-    expect([...TRACKING_PARAMETER_NAMES].sort()).toEqual(["is", "si"]);
+    expect([...TRACKING_PARAMETER_NAMES]).toContain("si");
+    expect([...TRACKING_PARAMETER_NAMES]).toContain("gclid");
+  });
+
+  /*
+   * Matching lowercases the name before the lookup, so an entry that is not
+   * already lowercase could never be found — a silent no-op rather than a
+   * failure. HubSpot spells one of these `hsCtaTracking`, which is exactly the
+   * mistake this catches.
+   */
+  it("holds every name in lowercase, since lookups are lowercased", () => {
+    for (const name of TRACKING_PARAMETER_NAMES) {
+      expect(name).toBe(name.toLowerCase());
+    }
+  });
+
+  /*
+   * A name here that some site uses for real would strip links to the wrong
+   * place. Generic words are the ones to keep out, however often they also
+   * carry tracking.
+   */
+  it("holds no parameter a site might legitimately use", () => {
+    for (const generic of ["ref", "tag", "source", "id", "q", "v", "t", "list", "page", "s"]) {
+      expect(TRACKING_PARAMETER_NAMES.has(generic)).toBe(false);
+    }
   });
 });
 
@@ -191,6 +215,60 @@ describe("stripTrackingParams", () => {
     ["percent-encoding", "https://example.test/a%2Fb?utm_source=1", "https://example.test/a%2Fb"],
   ])("does not normalize %s", (_label, value, expected) => {
     expect(stripTrackingParams(value)).toBe(expected);
+  });
+
+  describe("the named trackers", () => {
+    it.each([
+      ["gclid", "https://ex.test/a?gclid=abc123", "https://ex.test/a"],
+      ["fbclid", "https://ex.test/a?fbclid=IwAR0x", "https://ex.test/a"],
+      ["msclkid", "https://ex.test/a?msclkid=9f", "https://ex.test/a"],
+      ["igshid", "https://ex.test/a?igshid=MzR", "https://ex.test/a"],
+      ["mc_eid", "https://ex.test/a?mc_cid=1&mc_eid=2", "https://ex.test/a"],
+      ["mkt_tok", "https://ex.test/a?mkt_tok=eyJ", "https://ex.test/a"],
+      ["_hsenc", "https://ex.test/a?_hsenc=p2A&_hsmi=8", "https://ex.test/a"],
+      ["wbraid", "https://ex.test/a?wbraid=Ck8&gbraid=0AA", "https://ex.test/a"],
+    ])("removes %s", (_name, value, expected) => {
+      expect(stripTrackingParams(value)).toBe(expected);
+    });
+
+    it("removes a click id while leaving the rest of the query in place", () => {
+      expect(stripTrackingParams("https://ex.test/a?page=2&gclid=abc&sort=new")).toBe(
+        "https://ex.test/a?page=2&sort=new"
+      );
+    });
+
+    /*
+     * The blocklist only works while every name on it is meaningless to the page.
+     * These are the parameters that carry the destination on sites people
+     * actually paste from — the same ones link-cleaner restores by hand after
+     * dropping the query wholesale. Any of them appearing above would mean this
+     * strips links to somewhere other than where they pointed.
+     */
+    it.each([
+      ["a YouTube video and timestamp", "https://youtube.com/watch?v=abc&t=120"],
+      ["a YouTube playlist", "https://youtube.com/playlist?list=PL123"],
+      ["a search query", "https://ex.test/search?q=rss+readers"],
+      ["a Google Play app id", "https://play.google.com/store/apps/details?id=com.example"],
+      ["a Facebook story", "https://www.facebook.com/story.php?story_fbid=1&id=2"],
+      ["a Webtoon episode", "https://www.webtoons.com/ep?title_no=95&episode_no=3"],
+      ["a paging cursor", "https://ex.test/a?page=4&per_page=50"],
+    ])("keeps %s untouched", (_label, value) => {
+      expect(stripTrackingParams(value)).toBe(value);
+    });
+
+    it("matches the names case-insensitively, as the prefix is", () => {
+      expect(stripTrackingParams("https://ex.test/a?GCLID=x&FbClId=y")).toBe("https://ex.test/a");
+    });
+
+    /* A tracker is identified by name, so its value can be anything at all. */
+    it("removes a tracker with an empty value or none", () => {
+      expect(stripTrackingParams("https://ex.test/a?gclid=&keep=1")).toBe(
+        "https://ex.test/a?keep=1"
+      );
+      expect(stripTrackingParams("https://ex.test/a?fbclid&keep=1")).toBe(
+        "https://ex.test/a?keep=1"
+      );
+    });
   });
 
   it("leaves http URLs alone in the same way as https", () => {
