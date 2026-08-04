@@ -22,6 +22,33 @@ function footer(): SafeHtml {
   return safe(render("footer", {}));
 }
 
+/** The behaviour behind every copy button on a page, injected the same way the styles are. */
+function copyScript(): SafeHtml {
+  return safe(render("copy-script", {}));
+}
+
+/**
+ * The RSS control: a button that copies the feed's address, not a link to it.
+ *
+ * Following a link to an XML document downloads it in most browsers, which is
+ * never what the click meant — the address is the thing a reader wants, to
+ * paste somewhere else. The button carries the path and the page script
+ * resolves it against the current location when clicked, so the copied value
+ * is absolute without the server having to know its own public host.
+ *
+ * `label` names the feed and so carries a stored title. It is not wrapped in
+ * `safe()`: `aria-label` is a quoted attribute, and escaping is what that
+ * position needs.
+ */
+function renderCopyRssButton(slug: string, title: string): SafeHtml {
+  return safe(
+    render("copy-rss-button", {
+      feedUrl: feedPath(slug),
+      label: `Copy the RSS address for ${title}`,
+    })
+  );
+}
+
 /**
  * A link, or inert text when the URL is not one a browser should follow.
  *
@@ -63,7 +90,7 @@ export function renderFeedRow(row: FeedSummaryRow): SafeHtml {
       description: row.description,
       slug: row.slug,
       pagePath: feedPagePath(row.slug),
-      feedUrl: feedPath(row.slug),
+      rssButton: renderCopyRssButton(row.slug, row.title),
       entryCount: row.entry_count,
       // Deleting a feed takes its entries with it, which is not obvious from a
       // trash can on a row, so the confirmation says so before it happens.
@@ -87,7 +114,12 @@ export function renderFeedRows(rows: readonly FeedSummaryRow[]): SafeHtml {
 
 /** The whole listing page. */
 export function renderIndexPage(rows: readonly FeedSummaryRow[]): string {
-  return render("index", { rows: renderFeedRows(rows), styles: styles(), footer: footer() });
+  return render("index", {
+    rows: renderFeedRows(rows),
+    styles: styles(),
+    copyScript: copyScript(),
+    footer: footer(),
+  });
 }
 
 /**
@@ -162,11 +194,13 @@ export function renderFeedPage(feed: FeedRow, entries: readonly EntryRow[]): str
     description: feed.description,
     slug: feed.slug,
     feedUrl: feedPath(feed.slug),
+    rssButton: renderCopyRssButton(feed.slug, feed.title),
     createPath: `${feedPagePath(feed.slug)}/entries`,
     entryCount: entries.length,
     siteLink: renderSiteLink(feed),
     entries: renderEntryRows(feed.slug, entries),
     styles: styles(),
+    copyScript: copyScript(),
     footer: footer(),
   });
 }

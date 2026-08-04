@@ -98,6 +98,8 @@ describe("template files", () => {
       "index",
       "feed-row",
       "feed-rows-empty",
+      "copy-rss-button",
+      "copy-script",
       "validation-errors",
       "validation-error-item",
       "errors-cleared",

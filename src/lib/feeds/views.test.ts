@@ -142,10 +142,11 @@ describe("renderFeedPage", () => {
     expect(html).toContain("/api/feeds/tech/entries");
   });
 
-  it("lists entries and links to the RSS", () => {
+  it("lists entries and advertises the RSS to the browser", () => {
     const html = renderFeedPage(feed, [entry()]);
     expect(html).toContain("A post");
-    expect(html).toContain("/feeds/tech.xml");
+    expect(html).toContain('rel="alternate" type="application/rss+xml"');
+    expect(html).toContain('href="/feeds/tech.xml"');
   });
 
   it("escapes the feed title and description", () => {
@@ -188,6 +189,55 @@ const summary = (overrides: Partial<FeedSummaryRow> = {}): FeedSummaryRow => ({
   ...feed,
   entry_count: 0,
   ...overrides,
+});
+
+describe("the RSS copy button", () => {
+  it("copies the feed address instead of navigating to it", () => {
+    const html = renderFeedRow(summary()).html;
+    expect(html).toContain('data-copy="/feeds/tech.xml"');
+    expect(html).toContain('type="button"');
+    expect(html).not.toContain('<a href="/feeds/tech.xml"');
+  });
+
+  it("names the feed, since the visible label is only the word RSS", () => {
+    expect(renderFeedRow(summary()).html).toContain(
+      'aria-label="Copy the RSS address for Tech Weekly"'
+    );
+  });
+
+  /* The title is stored, and it reaches a quoted attribute here. */
+  it("escapes a title that would otherwise break out of the label attribute", () => {
+    const html = renderFeedRow(summary({ title: '" onmouseover="alert(1)' })).html;
+    expect(html).not.toContain('onmouseover="alert(1)"');
+    expect(html).toContain("&quot; onmouseover=&quot;alert(1)");
+  });
+
+  it("appears once per feed and not at all in the empty state", () => {
+    const rows = renderFeedRows([summary(), summary({ slug: "food", title: "Food" })]).html;
+    expect(rows.match(/data-copy=/g)).toHaveLength(2);
+    expect(renderFeedRows([]).html).not.toContain("data-copy");
+  });
+
+  it("stands where the RSS link used to on the feed page", () => {
+    expect(renderFeedPage(feed, [])).toContain('data-copy="/feeds/tech.xml"');
+  });
+
+  it.each([
+    ["the listing page", () => renderIndexPage([summary()])],
+    ["a feed page", () => renderFeedPage(feed, [])],
+  ])("ships the copy behaviour and its live region with %s", (_name, renderPage) => {
+    const html = renderPage();
+    expect(html).toContain('id="copy-status"');
+    expect(html).toContain('role="status"');
+    expect(html).toContain("navigator.clipboard");
+  });
+
+  /* Rows arrive by htmx swap after load, so a listener bound per button would die with them. */
+  it("binds the handler on the document rather than on each button", () => {
+    const html = renderIndexPage([summary()]);
+    expect(html).toContain('document.addEventListener("click"');
+    expect(html).not.toContain("onclick=");
+  });
 });
 
 describe("the feed delete button", () => {

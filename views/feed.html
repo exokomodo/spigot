@@ -14,8 +14,7 @@
     <h1>{{title}}</h1>
     <p class="tagline">{{description}}</p>
     <p class="feed-meta">
-      <code>{{slug}}</code> &middot; <a href="{{feedUrl}}">RSS</a> &middot; {{entryCount}} entries
-      {{siteLink}}
+      <code>{{slug}}</code> &middot; {{rssButton}} &middot; {{entryCount}} entries {{siteLink}}
     </p>
 
     <h2>New entry</h2>
@@ -66,6 +65,6 @@
       {{entries}}
     </ul>
 
-    {{footer}}
+    {{copyScript}} {{footer}}
   </body>
 </html>
