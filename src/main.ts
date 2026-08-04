@@ -1,4 +1,3 @@
-import path from "node:path";
 import express from "express";
 import { loadConfig } from "./lib/config.js";
 import { loadDatabase } from "./lib/database.js";
@@ -23,7 +22,16 @@ async function main() {
   // Both ship with Express 5. The form posts urlencoded; the API takes JSON.
   app.use(express.json());
   app.use(express.urlencoded({ extended: false }));
-  app.use("/vendor", express.static(path.join(PUBLIC_DIRECTORY, "vendor")));
+  /*
+   * Served from the root rather than under a prefix, because the icons have to
+   * answer at the addresses browsers ask for: `/favicon.ico` is requested
+   * without being linked at all, and `site.webmanifest` names its icons by
+   * absolute path. `/vendor` falls out of the same mount.
+   *
+   * Registered before the controllers, so a request is answered from disk when
+   * a file exists and falls through to the routes when it does not.
+   */
+  app.use(express.static(PUBLIC_DIRECTORY));
 
   for (const controller of [
     ApiFeedsController,

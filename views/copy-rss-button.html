@@ -1,7 +1,7 @@
 <button type="button" class="copy-rss" data-copy="{{feedUrl}}" aria-label="{{label}}">
   <!--
     Inline rather than an asset, for the same reason as the delete button: there
-    is no icon build step and the static directory only serves /vendor. Both
+    is no icon build step, and an inline icon inherits `currentColor`. Both
     icons ship together and CSS shows one at a time, so the confirmation needs
     no markup swap.
   -->

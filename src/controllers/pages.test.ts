@@ -117,6 +117,17 @@ describe("GET /", () => {
     expect(body).toContain("/vendor/htmx.min.js");
     expect(body).not.toMatch(/https?:\/\/[^"']*htmx/);
   });
+
+  it("carries the icon links and the manifest in the head", async () => {
+    const { port } = await boot();
+    const body = (await request(port, "GET", "/")).body;
+    expect(body).toContain('rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png"');
+    expect(body).toContain('rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png"');
+    expect(body).toContain('rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png"');
+    expect(body).toContain('rel="manifest" href="/site.webmanifest"');
+    // In <head>, where a browser reads them, not somewhere in the body.
+    expect(body.indexOf("apple-touch-icon")).toBeLessThan(body.indexOf("</head>"));
+  });
 });
 
 describe("XSS", () => {
