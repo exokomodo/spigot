@@ -1,0 +1,40 @@
+<button type="button" class="copy-rss" data-copy="{{feedUrl}}" aria-label="{{label}}">
+  <!--
+    Inline rather than an asset, for the same reason as the delete button: there
+    is no icon build step and the static directory only serves /vendor. Both
+    icons ship together and CSS shows one at a time, so the confirmation needs
+    no markup swap.
+  -->
+  <svg
+    class="icon-copy"
+    viewBox="0 0 24 24"
+    width="14"
+    height="14"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="1.8"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    aria-hidden="true"
+    focusable="false"
+  >
+    <rect x="9" y="9" width="11" height="11" rx="2" />
+    <path d="M6 15H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v1" />
+  </svg>
+  <svg
+    class="icon-copied"
+    viewBox="0 0 24 24"
+    width="14"
+    height="14"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="1.8"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    aria-hidden="true"
+    focusable="false"
+  >
+    <path d="M4 12.5l5 5 11-11" />
+  </svg>
+  <span class="copy-rss-label">RSS</span>
+</button>

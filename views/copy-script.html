@@ -1,0 +1,82 @@
+<!--
+  Announcement channel for the copy buttons. It is one region per page rather
+  than one per button: a button's own label changing is not reliably announced,
+  and a live region that already exists when the text lands is.
+-->
+<span id="copy-status" role="status" aria-live="polite" class="visually-hidden"></span>
+
+<script>
+  (function () {
+    // Long enough to read the checkmark, short enough that a row does not sit
+    // in the confirmed state while the reader is looking somewhere else.
+    var RESET_MS = 2000;
+    var status = document.getElementById("copy-status");
+    var timers = new WeakMap();
+    var labels = new WeakMap();
+
+    function copyText(text) {
+      if (navigator.clipboard && window.isSecureContext) {
+        return navigator.clipboard.writeText(text);
+      }
+      // The clipboard API is unavailable on plain http, which a self-hosted
+      // install on a LAN often is. The deprecated path is what is left there.
+      return new Promise(function (resolve, reject) {
+        var field = document.createElement("textarea");
+        field.value = text;
+        field.setAttribute("readonly", "");
+        field.style.position = "fixed";
+        field.style.top = "0";
+        field.style.opacity = "0";
+        document.body.appendChild(field);
+        field.select();
+        var copied = document.execCommand("copy");
+        document.body.removeChild(field);
+        if (copied) {
+          resolve();
+        } else {
+          reject(new Error("The browser refused the copy"));
+        }
+      });
+    }
+
+    function flash(button, state, label, message) {
+      var text = button.querySelector(".copy-rss-label");
+      if (!labels.has(button)) {
+        labels.set(button, text.textContent);
+      }
+      text.textContent = label;
+      button.dataset.state = state;
+      status.textContent = message;
+      clearTimeout(timers.get(button));
+      timers.set(
+        button,
+        setTimeout(function () {
+          text.textContent = labels.get(button);
+          delete button.dataset.state;
+          status.textContent = "";
+        }, RESET_MS)
+      );
+    }
+
+    // Delegated, because htmx swaps rows in after this runs and a button bound
+    // at load would stop working the moment the table refreshed.
+    document.addEventListener("click", function (event) {
+      var button = event.target.closest("button.copy-rss");
+      if (button === null) {
+        return;
+      }
+      // The server writes the path it serves, not a guess at its own public
+      // host; resolving here makes the copied value absolute wherever the app
+      // is reached from, which is what a feed reader needs.
+      var url = new URL(button.dataset.copy, window.location.href).href;
+      copyText(url).then(
+        function () {
+          flash(button, "copied", "Copied", "Copied " + url + " to the clipboard");
+        },
+        function () {
+          flash(button, "failed", "Copy failed", "Could not copy. The feed address is " + url);
+        }
+      );
+    });
+  })();
+</script>
