@@ -178,83 +178,66 @@ describe("POST /api/feeds/:slug/entries", () => {
     expect(res.status).toBe(201);
   });
 
-  describe("the strip query parameter", () => {
-    const tracked = { ...valid, url: "https://example.test/a?utm_source=news#part-2" };
+  describe("tracking parameters", () => {
+    const tracked = { ...valid, url: "https://example.test/a?utm_source=news&page=2#part-2" };
 
-    /* The compatibility promise: a caller that never heard of the flag is unaffected. */
-    it("stores the url untouched when the flag is absent", async () => {
+    /* No flag: the API removes trackers from every entry url it is given. */
+    it("removes them with nothing in the request asking for it", async () => {
       const { port, db } = await boot();
       await createFeed(db, { slug: "tech", title: "Tech" });
       const res = await post(port, "/api/feeds/tech/entries", tracked);
       expect(res.status).toBe(201);
-      expect(res.json.entry).toMatchObject({
-        url: "https://example.test/a?utm_source=news#part-2",
-      });
+      expect(res.json.entry).toMatchObject({ url: "https://example.test/a?page=2#part-2" });
     });
 
-    it.each(["strip=true", "strip=1", "strip=on", "strip"])(
-      "drops the query and keeps the fragment for ?%s",
-      async (query) => {
-        const { port, db } = await boot();
-        await createFeed(db, { slug: "tech", title: "Tech" });
-        const res = await post(port, `/api/feeds/tech/entries?${query}`, tracked);
-        expect(res.status).toBe(201);
-        expect(res.json.entry).toMatchObject({ url: "https://example.test/a#part-2" });
-      }
-    );
-
-    it.each(["strip=false", "strip=0", "strip=off"])(
-      "stores the url as sent for ?%s",
-      async (q) => {
-        const { port, db } = await boot();
-        await createFeed(db, { slug: "tech", title: "Tech" });
-        const res = await post(port, `/api/feeds/tech/entries?${q}`, tracked);
-        expect(res.status).toBe(201);
-        expect(res.json.entry).toMatchObject({
-          url: "https://example.test/a?utm_source=news#part-2",
-        });
-      }
-    );
-
-    /* A flag that quietly did nothing would store exactly what it was told to remove. */
-    it("400s a value that is neither, and stores nothing", async () => {
+    /* A leftover `?strip` is now just an unknown parameter, not a 400. */
+    it("ignores a strip parameter a caller still sends", async () => {
       const { port, db } = await boot();
       await createFeed(db, { slug: "tech", title: "Tech" });
-      const res = await post(port, "/api/feeds/tech/entries?strip=yes", tracked);
-      expect(res.status).toBe(400);
-      const error = res.json.error as { details: { field: string; message: string }[] };
-      expect(error.details.map((d) => d.field)).toEqual(["strip"]);
-      expect(error.details[0].message).toContain("true");
-      const count = await db.instance.get<{ n: number }>("SELECT COUNT(*) AS n FROM entries");
-      expect(count?.n).toBe(0);
+      const res = await post(port, "/api/feeds/tech/entries?strip=false", tracked);
+      expect(res.status).toBe(201);
+      expect(res.json.entry).toMatchObject({ url: "https://example.test/a?page=2#part-2" });
+    });
+
+    it("leaves a url that carries no trackers exactly as sent", async () => {
+      const { port, db } = await boot();
+      await createFeed(db, { slug: "tech", title: "Tech" });
+      const res = await post(port, "/api/feeds/tech/entries", {
+        ...valid,
+        url: "https://example.test/a?q=a+b%20c&page=2#part-2",
+      });
+      expect(res.status).toBe(201);
+      expect(res.json.entry).toMatchObject({
+        url: "https://example.test/a?q=a+b%20c&page=2#part-2",
+      });
     });
 
     /* The guid is derived from the url, so it has to be the stored one. */
     it("gives a permalink guid that matches the stored url", async () => {
       const { port, db } = await boot();
       await createFeed(db, { slug: "tech", title: "Tech" });
-      await post(port, "/api/feeds/tech/entries?strip=true", tracked);
+      await post(port, "/api/feeds/tech/entries", tracked);
       const row = await db.instance.get<{ guid: string; url: string }>(
         "SELECT guid, url FROM entries"
       );
-      expect(row?.url).toBe("https://example.test/a#part-2");
-      expect(row?.guid).toBe("https://example.test/a#part-2");
+      expect(row?.url).toBe("https://example.test/a?page=2#part-2");
+      expect(row?.guid).toBe("https://example.test/a?page=2#part-2");
     });
 
-    /* Only the entry url was asked for; a signed media URL needs its query. */
+    /* Only the entry url is cleaned; a signed media URL is the host's to spell. */
     it("leaves the enclosure url alone", async () => {
       const { port, db } = await boot();
       await createFeed(db, { slug: "tech", title: "Tech" });
-      const res = await post(port, "/api/feeds/tech/entries?strip=true", {
+      const res = await post(port, "/api/feeds/tech/entries", {
         ...tracked,
-        enclosureUrl: "https://cdn.example.test/a.mp3?token=abc",
+        enclosureUrl: "https://cdn.example.test/a.mp3?utm_source=x",
         enclosureType: "audio/mpeg",
         enclosureLength: 1234,
       });
       expect(res.status).toBe(201);
       expect(res.json.entry).toMatchObject({
-        url: "https://example.test/a#part-2",
-        enclosure: { url: "https://cdn.example.test/a.mp3?token=abc" },
+        url: "https://example.test/a?page=2#part-2",
+        enclosure: { url: "https://cdn.example.test/a.mp3?utm_source=x" },
       });
     });
   });

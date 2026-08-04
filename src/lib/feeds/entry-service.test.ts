@@ -9,8 +9,6 @@ import {
   findEntryFromRequest,
   parseEntryId,
   parseNewEntry,
-  parseStripFlag,
-  stripFlagFromBody,
   updateEntryFromRequest,
 } from "./entry-service.js";
 import {
@@ -127,7 +125,7 @@ describe("parseNewEntry", () => {
       const entry = parseNewEntry(
         feed,
         { ...valid, url: "https://example.test/a?utm_source=x" },
-        { now: NOW, stripQuery: true }
+        { now: NOW }
       );
       expect(entry.url).toBe("https://example.test/a");
       expect(entry.guid).toBe("https://example.test/a");
@@ -137,34 +135,37 @@ describe("parseNewEntry", () => {
     it("leaves an explicit guid alone even when the url is stripped", () => {
       const entry = parseNewEntry(
         feed,
-        { ...valid, url: "https://example.test/a?utm_source=x", guid: "ep-42?keep=this" },
-        { now: NOW, stripQuery: true }
+        { ...valid, url: "https://example.test/a?utm_source=x", guid: "ep-42?utm_source=keep" },
+        { now: NOW }
       );
       expect(entry.url).toBe("https://example.test/a");
-      expect(entry.guid).toBe("ep-42?keep=this");
+      expect(entry.guid).toBe("ep-42?utm_source=keep");
       expect(entry.guidIsPermalink).toBe(false);
     });
   });
 
-  describe("stripQuery", () => {
-    const tracked = { ...valid, url: "https://example.test/a?utm_source=news#part-2" };
+  describe("tracking parameters", () => {
+    const tracked = { ...valid, url: "https://example.test/a?utm_source=news&page=2#part-2" };
 
-    it("keeps the url as sent when the option is absent", () => {
+    /* No flag to ask for it: every entry url is cleaned on the way in. */
+    it("removes them without being asked", () => {
       expect(parseNewEntry(feed, tracked, { now: NOW }).url).toBe(
-        "https://example.test/a?utm_source=news#part-2"
+        "https://example.test/a?page=2#part-2"
       );
     });
 
-    it("keeps the url as sent when the option is off", () => {
-      expect(parseNewEntry(feed, tracked, { now: NOW, stripQuery: false }).url).toBe(
-        "https://example.test/a?utm_source=news#part-2"
-      );
+    it("keeps the rest of the query, so a url still points where it did", () => {
+      expect(
+        parseNewEntry(feed, { ...valid, url: "https://youtu.be/abc?t=120&si=xyz" }, { now: NOW })
+          .url
+      ).toBe("https://youtu.be/abc?t=120");
     });
 
-    it("drops the query and keeps the fragment when the option is on", () => {
-      expect(parseNewEntry(feed, tracked, { now: NOW, stripQuery: true }).url).toBe(
-        "https://example.test/a#part-2"
-      );
+    it("leaves a url with no trackers exactly as sent", () => {
+      expect(
+        parseNewEntry(feed, { ...valid, url: "https://example.test/a?q=a+b#part-2" }, { now: NOW })
+          .url
+      ).toBe("https://example.test/a?q=a+b#part-2");
     });
 
     it("leaves the enclosure url alone", () => {
@@ -172,31 +173,33 @@ describe("parseNewEntry", () => {
         feed,
         {
           ...tracked,
-          enclosureUrl: "https://cdn.example.test/a.mp3?token=abc",
+          enclosureUrl: "https://cdn.example.test/a.mp3?utm_source=x",
           enclosureType: "audio/mpeg",
           enclosureLength: 1234,
         },
-        { now: NOW, stripQuery: true }
+        { now: NOW }
       );
-      expect(entry.url).toBe("https://example.test/a#part-2");
-      // A signed media URL stops working without its query; only the entry url was asked for.
-      expect(entry.enclosureUrl).toBe("https://cdn.example.test/a.mp3?token=abc");
+      expect(entry.url).toBe("https://example.test/a?page=2#part-2");
+      // A signed media URL is the host's to spell; only the entry url is cleaned.
+      expect(entry.enclosureUrl).toBe("https://cdn.example.test/a.mp3?utm_source=x");
     });
 
     /* Stripping is not a way past validation, and not a way to fail it either. */
     it("still rejects a url that is unsafe once stripped", () => {
-      expect(fields({ ...valid, url: "javascript:alert(1)?x=1" })).toEqual(["url"]);
+      expect(fields({ ...valid, url: "javascript:alert(1)?utm_source=x" })).toEqual(["url"]);
     });
 
     it("still rejects an empty url", () => {
       expect(fields({ ...valid, url: "   " })).toEqual(["url"]);
     });
 
-    /* The query is often most of what pushed a shared link over the limit. */
+    /* Tracking is often most of what pushed a shared link over the limit. */
     it("measures the length limit against the stripped url", () => {
-      const url = `https://example.test/a?${"x".repeat(ENTRY_URL_MAX_LENGTH)}`;
-      expect(fields({ ...valid, url })).toContain("url");
-      expect(parseNewEntry(feed, { ...valid, url }, { now: NOW, stripQuery: true }).url).toBe(
+      const overLong = `https://example.test/a?keep=${"x".repeat(ENTRY_URL_MAX_LENGTH)}`;
+      expect(fields({ ...valid, url: overLong })).toContain("url");
+
+      const trackedOverLong = `https://example.test/a?utm_content=${"x".repeat(ENTRY_URL_MAX_LENGTH)}`;
+      expect(parseNewEntry(feed, { ...valid, url: trackedOverLong }, { now: NOW }).url).toBe(
         "https://example.test/a"
       );
     });
@@ -344,21 +347,14 @@ describe("createEntryFromRequest", () => {
     await Promise.all(databases.splice(0).map((db) => db.instance.close()));
   });
 
-  const tracked = { url: "https://example.test/a?utm_source=news", title: "A post" };
+  const tracked = { url: "https://example.test/a?utm_source=news&page=2", title: "A post" };
 
-  it("stores the url as sent when no option is passed", async () => {
+  it("stores the url with its trackers removed, with nothing asking for it", async () => {
     const db = await open();
     await createFeed(db, { slug: "tech", title: "Tech" });
     const { entry } = await createEntryFromRequest(db, "tech", tracked);
-    expect(entry.url).toBe("https://example.test/a?utm_source=news");
-  });
-
-  it("stores the stripped url when the option is on", async () => {
-    const db = await open();
-    await createFeed(db, { slug: "tech", title: "Tech" });
-    const { entry } = await createEntryFromRequest(db, "tech", tracked, { stripQuery: true });
-    expect(entry.url).toBe("https://example.test/a");
-    expect(entry.guid).toBe("https://example.test/a");
+    expect(entry.url).toBe("https://example.test/a?page=2");
+    expect(entry.guid).toBe("https://example.test/a?page=2");
   });
 
   /*
@@ -368,78 +364,27 @@ describe("createEntryFromRequest", () => {
   it("makes two differently tracked copies of one link collide", async () => {
     const db = await open();
     await createFeed(db, { slug: "tech", title: "Tech" });
-    await createEntryFromRequest(db, "tech", tracked, { stripQuery: true });
+    await createEntryFromRequest(db, "tech", tracked);
 
     await expect(
-      createEntryFromRequest(
-        db,
-        "tech",
-        { ...tracked, url: "https://example.test/a?utm_source=twitter" },
-        { stripQuery: true }
-      )
+      createEntryFromRequest(db, "tech", {
+        ...tracked,
+        url: "https://example.test/a?utm_source=twitter&page=2",
+      })
     ).rejects.toBeInstanceOf(DuplicateGuidError);
   });
-});
 
-describe("parseStripFlag", () => {
-  /* Absent is the one that matters: it is what every existing caller sends. */
-  it("is off when absent", () => {
-    expect(parseStripFlag(undefined)).toBe(false);
-  });
+  /* Two different pages of one site stay two entries: only trackers are ignored. */
+  it("still tells apart links that differ outside their trackers", async () => {
+    const db = await open();
+    await createFeed(db, { slug: "tech", title: "Tech" });
+    await createEntryFromRequest(db, "tech", tracked);
 
-  it.each(["true", "1", "on", "TRUE", "  On  "])("reads %j as on", (value) => {
-    expect(parseStripFlag(value)).toBe(true);
-  });
-
-  /* `?strip` with no value: writing the flag at all is the request. */
-  it("reads a bare flag as on", () => {
-    expect(parseStripFlag("")).toBe(true);
-  });
-
-  it.each(["false", "0", "off", "OFF"])("reads %j as off", (value) => {
-    expect(parseStripFlag(value)).toBe(false);
-  });
-
-  /*
-   * The alternative would be reading a typo as false, which silently stores the
-   * tracking parameters the caller asked to drop and answers 201 either way.
-   */
-  it.each(["yes", "maybe", "tru", "2", "null"])("rejects %j rather than guessing", (value) => {
-    expect(() => parseStripFlag(value)).toThrow(ValidationError);
-  });
-
-  it("names the field and the accepted spellings when it rejects", () => {
-    try {
-      parseStripFlag("yes");
-    } catch (error) {
-      expect(error).toBeInstanceOf(ValidationError);
-      const issue = (error as ValidationError).issues[0];
-      expect(issue.field).toBe("strip");
-      expect(issue.message).toContain("true");
-      expect(issue.message).toContain("off");
-      return;
-    }
-    throw new Error("expected a ValidationError");
-  });
-
-  /* A repeated query parameter arrives as an array and has no single answer. */
-  it("rejects a value that is not a single string", () => {
-    expect(() => parseStripFlag(["true", "false"])).toThrow(ValidationError);
-    expect(() => parseStripFlag(true)).toThrow(ValidationError);
-  });
-});
-
-describe("stripFlagFromBody", () => {
-  it("is off for a body with no flag, including one that is not an object", () => {
-    expect(stripFlagFromBody({ url: "https://example.test/a" })).toBe(false);
-    expect(stripFlagFromBody(undefined)).toBe(false);
-    expect(stripFlagFromBody("nonsense")).toBe(false);
-  });
-
-  /* What a checked checkbox posts, both with and without a value attribute. */
-  it("reads what a checked checkbox posts", () => {
-    expect(stripFlagFromBody({ strip: "true" })).toBe(true);
-    expect(stripFlagFromBody({ strip: "on" })).toBe(true);
+    const { entry } = await createEntryFromRequest(db, "tech", {
+      ...tracked,
+      url: "https://example.test/a?utm_source=news&page=3",
+    });
+    expect(entry.url).toBe("https://example.test/a?page=3");
   });
 });
 

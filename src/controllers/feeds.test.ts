@@ -102,10 +102,10 @@ const submitRaw = (
   });
 
 /**
- * Submits the entry form the way a browser does, so the flag arrives in the body.
+ * Submits the entry form the way a browser does.
  *
- * Takes the body already encoded, because the strip tests care about the exact
- * spelling of the flag they send.
+ * Takes the body already encoded, because the tracking tests care about the
+ * exact spelling of the URL they send.
  */
 const postForm = (port: number, path: string, form: string): Promise<HttpResponse> =>
   submitRaw(port, "POST", path, form);
@@ -281,54 +281,43 @@ describe("the feed page", () => {
 });
 
 describe("POST /feeds/:slug/entries", () => {
-  const TRACKED = "url=https%3A%2F%2Fexample.test%2Fnew%3Futm_source%3Dnews%23part-2&title=New";
+  const TRACKED =
+    "url=https%3A%2F%2Fexample.test%2Fnew%3Futm_source%3Dnews%26page%3D2%23part-2&title=New";
 
   const storedUrl = async (db: Database): Promise<string | undefined> =>
     (await db.instance.get<{ url: string }>("SELECT url FROM entries ORDER BY id DESC LIMIT 1"))
       ?.url;
 
-  it("strips the query when the checkbox was left checked", async () => {
-    const { port, db } = await boot();
-    await seed(db, "tech");
-
-    const response = await postForm(port, "/feeds/tech/entries", `${TRACKED}&strip=true`);
-
-    expect(response.status).toBe(201);
-    expect(await storedUrl(db)).toBe("https://example.test/new#part-2");
-  });
-
-  /*
-   * The whole reason the form and the API can share one absent-means-off rule:
-   * an unchecked box posts nothing, so unchecking it is indistinguishable from
-   * an API caller that never sent the flag.
-   */
-  it("keeps the url as pasted when the checkbox was unchecked and so posted nothing", async () => {
+  /* Nothing on the form asks for this; the page does it for whatever is pasted. */
+  it("removes the tracking parameters and keeps the rest of the url", async () => {
     const { port, db } = await boot();
     await seed(db, "tech");
 
     const response = await postForm(port, "/feeds/tech/entries", TRACKED);
 
     expect(response.status).toBe(201);
-    expect(await storedUrl(db)).toBe("https://example.test/new?utm_source=news#part-2");
+    expect(await storedUrl(db)).toBe("https://example.test/new?page=2#part-2");
   });
 
-  it("retargets a nonsense flag at the error box as a 400", async () => {
+  it("stores a url with no trackers exactly as it was pasted", async () => {
     const { port, db } = await boot();
     await seed(db, "tech");
 
-    const response = await postForm(port, "/feeds/tech/entries", `${TRACKED}&strip=perhaps`);
+    const response = await postForm(
+      port,
+      "/feeds/tech/entries",
+      "url=https%3A%2F%2Fexample.test%2Fnew%3Fq%3Da%2Bb%2520c&title=New"
+    );
 
-    expect(response.status).toBe(400);
-    expect(response.headers["hx-retarget"]).toBe("#errors");
-    expect(response.body).toContain("strip");
-    expect(await db.instance.get("SELECT count(*) AS n FROM entries")).toMatchObject({ n: 1 });
+    expect(response.status).toBe(201);
+    expect(await storedUrl(db)).toBe("https://example.test/new?q=a+b%20c");
   });
 
   it("returns the refreshed entry list on success", async () => {
     const { port, db } = await boot();
     await seed(db, "tech");
 
-    const response = await postForm(port, "/feeds/tech/entries", `${TRACKED}&strip=true`);
+    const response = await postForm(port, "/feeds/tech/entries", TRACKED);
 
     expect(response.body).toContain("New");
     expect(response.body).not.toContain("<!doctype html>");
@@ -336,28 +325,25 @@ describe("POST /feeds/:slug/entries", () => {
 });
 
 describe("the new entry form", () => {
-  /*
-   * Checked by default: the ordinary path drops the tracking, and a person who
-   * wants the URL exactly as pasted opts out rather than opting in.
-   */
-  it("offers the strip checkbox already checked", async () => {
+  /* Nothing to opt into, so nothing to offer: the form takes a url and no more. */
+  it("has no strip control to check", async () => {
     const { port, db } = await boot();
     await seed(db, "tech");
 
     const body = (await request(port, "/feeds/tech")).body;
 
-    expect(body).toMatch(/<input name="strip" type="checkbox" value="true" checked/);
+    expect(body).not.toContain('name="strip"');
   });
 
-  /* The effect has to be legible before submitting, not after. */
-  it("says what the checkbox will do to the URL", async () => {
+  /* Losing part of a pasted URL has to be legible before submitting, not after. */
+  it("says what will be taken out of the URL", async () => {
     const { port, db } = await boot();
     await seed(db, "tech");
 
     const body = (await request(port, "/feeds/tech")).body;
 
-    expect(body).toContain("Remove the query string");
     expect(body).toContain("utm_source");
+    expect(body).toContain("are removed from the URL");
   });
 });
 
