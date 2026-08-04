@@ -8,7 +8,22 @@
     {{icons}} {{styles}}
   </head>
   <body>
-    <h1>Spigot</h1>
+    <!--
+      The mark is decorative: the word beside it already says Spigot, so an alt
+      text would only make a screen reader read the name twice. The 2x source is
+      the touch icon, which keeps it sharp where the 32px favicon would blur.
+    -->
+    <h1>
+      <img
+        class="mark"
+        src="/favicon-32x32.png"
+        srcset="/favicon-32x32.png 1x, /apple-touch-icon.png 2x"
+        width="32"
+        height="32"
+        alt=""
+      />
+      Spigot
+    </h1>
     <p class="tagline">RSS feeds, assembled and served.</p>
 
     <h2>New feed</h2>

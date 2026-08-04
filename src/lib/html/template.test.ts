@@ -142,6 +142,21 @@ describe("template files", () => {
       }
     });
 
+    /* The same walk for the mark beside the heading, including its 2x source. */
+    it("shows the home page mark from files that are actually shipped", () => {
+      const index = loadTemplate("index");
+      const sources = [
+        ...[...index.matchAll(/src="(\/[^"]+)"/g)].map(([, src]) => src),
+        ...[...index.matchAll(/srcset="([^"]+)"/g)].flatMap(([, srcset]) =>
+          srcset.split(",").map((candidate) => candidate.trim().split(/\s+/)[0])
+        ),
+      ].filter((source) => !source.startsWith("/vendor/"));
+      expect(sources.length).toBeGreaterThan(0);
+      for (const source of sources) {
+        expect(fs.existsSync(inPublic(source)), `${source} is shown but not in public/`).toBe(true);
+      }
+    });
+
     /* Requested from the root by browsers that were never told about it. */
     it("ships a root favicon.ico even though nothing links to it", () => {
       expect(fs.existsSync(inPublic("/favicon.ico"))).toBe(true);

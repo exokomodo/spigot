@@ -195,9 +195,10 @@ describe("XSS", () => {
     // The text `onerror=alert(1)` does survive, as inert characters inside an
     // escaped `&lt;img ...&gt;`. What must not survive is anything a parser
     // would read as a tag: no new element, and no closing of the real ones.
-    // The page has an `<svg>` of its own — the trash icon — so the payload's
-    // opening tag is named rather than the element.
-    expect(body).not.toContain("<img");
+    // The page has an `<svg>` of its own — the trash icon — and an `<img>` —
+    // the mark beside the heading — so the payload's opening tag is named
+    // rather than the element.
+    expect(body).not.toContain("<img src=x");
     expect(body).not.toContain("<svg onload");
     expect(body).not.toContain(titlePayload);
     expect(body).not.toContain(descriptionPayload);
