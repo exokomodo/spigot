@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { EntryRow, FeedRow } from "./repository.js";
+import { EntryRow, FeedRow, FeedSummaryRow } from "./repository.js";
 import {
   formatPublishedAt,
   renderEntryRow,
   renderFeedPage,
+  renderFeedRow,
+  renderFeedRows,
   renderIndexPage,
   renderLink,
   renderNotFoundPage,
@@ -106,7 +108,7 @@ describe("formatPublishedAt", () => {
 
 describe("renderEntryRow", () => {
   it("renders a title, link and date", () => {
-    const html = renderEntryRow(entry()).html;
+    const html = renderEntryRow("tech", entry()).html;
     expect(html).toContain('href="https://example.test/a"');
     expect(html).toContain("A post");
     expect(html).toContain("2026-01-15 08:30:05 UTC");
@@ -114,6 +116,7 @@ describe("renderEntryRow", () => {
 
   it("renders the body as text, since entry markup comes from elsewhere", () => {
     const html = renderEntryRow(
+      "tech",
       entry({ description: "<b>bold</b> & <script>alert(1)</script>" })
     ).html;
     expect(html).not.toContain("<b>");
@@ -122,11 +125,11 @@ describe("renderEntryRow", () => {
   });
 
   it("falls back to content when there is no description", () => {
-    expect(renderEntryRow(entry({ content: "the content" })).html).toContain("the content");
+    expect(renderEntryRow("tech", entry({ content: "the content" })).html).toContain("the content");
   });
 
   it("does not link an entry whose stored URL is not http(s)", () => {
-    const html = renderEntryRow(entry({ url: "javascript:alert(1)" })).html;
+    const html = renderEntryRow("tech", entry({ url: "javascript:alert(1)" })).html;
     expect(html).not.toContain("<a ");
     expect(html).toContain("A post");
   });
@@ -178,5 +181,84 @@ describe("the footer", () => {
     const html = renderPage();
     expect(html).toContain('href="https://github.com/exokomodo/spigot"');
     expect(html).toContain("Source on GitHub");
+  });
+});
+
+const summary = (overrides: Partial<FeedSummaryRow> = {}): FeedSummaryRow => ({
+  ...feed,
+  entry_count: 0,
+  ...overrides,
+});
+
+describe("the feed delete button", () => {
+  it("deletes the feed's own path and refreshes the table body", () => {
+    const html = renderFeedRow(summary()).html;
+    expect(html).toContain('hx-delete="/feeds/tech"');
+    expect(html).toContain('hx-target="#feed-rows"');
+    expect(html).toContain('hx-swap="innerHTML"');
+  });
+
+  it("asks first, and says the entries go too", () => {
+    const html = renderFeedRow(summary()).html;
+    expect(html).toContain(
+      'hx-confirm="Delete the feed &quot;Tech Weekly&quot;? This also deletes its entries."'
+    );
+  });
+
+  it("has a name, since it is an icon with no text", () => {
+    expect(renderFeedRow(summary()).html).toContain('aria-label="Delete the feed Tech Weekly"');
+  });
+
+  /* The title is a stored value, and it reaches two attributes here. */
+  it("escapes a title that would otherwise break out of the confirm attribute", () => {
+    const html = renderFeedRow(summary({ title: '" onmouseover="alert(1)' })).html;
+    expect(html).not.toContain('onmouseover="alert(1)"');
+    expect(html).toContain("&quot; onmouseover=&quot;alert(1)");
+  });
+
+  it("escapes a script payload in the title rather than emitting it in the confirm", () => {
+    const html = renderFeedRow(summary({ title: "<script>alert(1)</script>" })).html;
+    expect(html).not.toContain("<script>alert(1)</script>");
+    expect(html).toContain("&lt;script&gt;");
+  });
+
+  it("appears once per feed and not at all in the empty state", () => {
+    const rows = renderFeedRows([summary(), summary({ slug: "food", title: "Food" })]).html;
+    expect(rows.match(/hx-delete=/g)).toHaveLength(2);
+    expect(renderFeedRows([]).html).not.toContain("hx-delete");
+  });
+
+  it("is reachable from the rendered index page", () => {
+    expect(renderIndexPage([summary()])).toContain('hx-delete="/feeds/tech"');
+  });
+});
+
+describe("the entry delete button", () => {
+  it("deletes the entry's own path under its feed and refreshes the list", () => {
+    const html = renderEntryRow("tech", entry({ id: 42 })).html;
+    expect(html).toContain('hx-delete="/feeds/tech/entries/42"');
+    expect(html).toContain('hx-target="#entry-list"');
+  });
+
+  it("asks first, naming the entry", () => {
+    const html = renderEntryRow("tech", entry()).html;
+    expect(html).toContain('hx-confirm="Delete the entry &quot;A post&quot;?"');
+    expect(html).toContain('aria-label="Delete the entry A post"');
+  });
+
+  it("escapes an entry title in the confirmation", () => {
+    const html = renderEntryRow("tech", entry({ title: '" onmouseover="alert(1)' })).html;
+    expect(html).not.toContain('onmouseover="alert(1)"');
+    expect(html).toContain("&quot; onmouseover=&quot;alert(1)");
+  });
+
+  /* The slug reaches an attribute as part of the URL, like every other value. */
+  it("escapes the slug it was handed", () => {
+    const html = renderEntryRow('" onmouseover="alert(1)', entry()).html;
+    expect(html).not.toContain('onmouseover="alert(1)"');
+  });
+
+  it("is absent from the empty state", () => {
+    expect(renderFeedPage(feed, [])).not.toContain("hx-delete");
   });
 });

@@ -184,8 +184,10 @@ describe("XSS", () => {
     // The text `onerror=alert(1)` does survive, as inert characters inside an
     // escaped `&lt;img ...&gt;`. What must not survive is anything a parser
     // would read as a tag: no new element, and no closing of the real ones.
+    // The page has an `<svg>` of its own — the trash icon — so the payload's
+    // opening tag is named rather than the element.
     expect(body).not.toContain("<img");
-    expect(body).not.toContain("<svg");
+    expect(body).not.toContain("<svg onload");
     expect(body).not.toContain(titlePayload);
     expect(body).not.toContain(descriptionPayload);
     expect(body).toContain("&lt;img src=x onerror=alert(1)&gt;");
@@ -246,5 +248,99 @@ describe("POST /feeds", () => {
     await request(port, "POST", "/feeds", "title=%21%21%21");
     expect((await request(port, "GET", "/")).body).toContain("No feeds yet");
     expect(await db.instance.get("SELECT count(*) AS n FROM feeds")).toMatchObject({ n: 0 });
+  });
+});
+
+describe("DELETE /feeds/:slug", () => {
+  it("returns the refreshed table body without the deleted feed", async () => {
+    const { port, db } = await boot();
+    await createFeedFromRequest(db, { title: "Tech Weekly" });
+    await createFeedFromRequest(db, { title: "Food" });
+
+    const res = await request(port, "DELETE", "/feeds/tech-weekly");
+
+    expect(res.status).toBe(200);
+    expect(res.headers["content-type"]).toBe("text/html; charset=utf-8");
+    expect(res.body).toContain("Food");
+    expect(res.body).not.toContain("Tech Weekly");
+  });
+
+  it("returns the empty placeholder when the last feed goes", async () => {
+    const { port, db } = await boot();
+    await createFeedFromRequest(db, { title: "Tech" });
+    expect((await request(port, "DELETE", "/feeds/tech")).body).toContain("No feeds yet");
+  });
+
+  it("clears the error box out of band after a success", async () => {
+    const { port, db } = await boot();
+    await createFeedFromRequest(db, { title: "Tech" });
+    const res = await request(port, "DELETE", "/feeds/tech");
+    expect(res.body).toContain('hx-swap-oob="outerHTML"');
+    expect(res.body).toContain('id="errors"');
+  });
+
+  it("really removes the feed, not just its row in the fragment", async () => {
+    const { port, db } = await boot();
+    await createFeedFromRequest(db, { title: "Tech" });
+
+    await request(port, "DELETE", "/feeds/tech");
+
+    expect(await db.instance.get("SELECT count(*) AS n FROM feeds")).toMatchObject({ n: 0 });
+    expect((await request(port, "GET", "/")).body).toContain("No feeds yet");
+  });
+
+  it("takes the feed's entries with it", async () => {
+    const { port, db } = await boot();
+    const feed = await createFeedFromRequest(db, { title: "Tech" });
+    await db.instance.run("INSERT INTO entries (feed_id, guid, url, title) VALUES (?, ?, ?, ?)", [
+      feed.id,
+      "g",
+      "https://example.test/g",
+      "A post",
+    ]);
+
+    await request(port, "DELETE", "/feeds/tech");
+
+    expect(await db.instance.get("SELECT count(*) AS n FROM entries")).toMatchObject({ n: 0 });
+  });
+
+  /* A stale page, or a second click: a real 404 rather than a 500 or a fake 200. */
+  it("answers 404 and retargets at the error box for a feed already gone", async () => {
+    const { port, db } = await boot();
+    await createFeedFromRequest(db, { title: "Tech" });
+    await request(port, "DELETE", "/feeds/tech");
+
+    const res = await request(port, "DELETE", "/feeds/tech");
+
+    expect(res.status).toBe(404);
+    expect(res.headers["hx-retarget"]).toBe("#errors");
+    expect(res.headers["hx-reswap"]).toBe("innerHTML");
+    expect(res.body).toContain("no longer exists");
+  });
+
+  it("answers 404 for a slug that never existed", async () => {
+    const { port } = await boot();
+    expect((await request(port, "DELETE", "/feeds/nope")).status).toBe(404);
+  });
+
+  it("renders the delete control on the index, confirmation and all", async () => {
+    const { port, db } = await boot();
+    await createFeedFromRequest(db, { title: "Tech Weekly" });
+    const body = (await request(port, "GET", "/")).body;
+
+    expect(body).toContain('hx-delete="/feeds/tech-weekly"');
+    expect(body).toContain("hx-confirm=");
+    expect(body).toContain("aria-label=");
+  });
+
+  it("escapes a title in the confirmation the fragment carries", async () => {
+    const { port, db } = await boot();
+    await createFeedFromRequest(db, { title: "Keep" });
+    await createFeedFromRequest(db, { title: ATTRIBUTE_PAYLOAD });
+
+    const res = await request(port, "DELETE", "/feeds/keep");
+
+    expect(res.body).not.toContain(ATTRIBUTE_PAYLOAD);
+    expect(res.body).toContain("&quot; onerror=&quot;alert(1)");
   });
 });

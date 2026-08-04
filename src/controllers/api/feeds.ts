@@ -3,12 +3,15 @@ import Dependencies from "../../lib/dependencies.js";
 import { toFeedJson, toFeedSummaryJson } from "../../lib/feeds/presenter.js";
 import {
   DuplicateSlugError,
+  FeedNotFoundError,
   ValidationError,
   createFeedFromRequest,
+  deleteFeed,
   listFeeds,
 } from "../../lib/feeds/service.js";
 import { Controller } from "../../lib/rest/controller.js";
 import Request from "../../lib/rest/request.js";
+import { pathParam } from "../feeds.js";
 
 /**
  * The JSON API. The HTML pages call the same service functions and differ only
@@ -39,8 +42,8 @@ function sendError(
 /**
  * Turns a thrown error into a response.
  *
- * Only the two errors the service raises deliberately become 4xx; anything else
- * is a bug here rather than a caller mistake, so it is logged and answered 500
+ * Only the errors the service raises deliberately become 4xx; anything else is a
+ * bug here rather than a caller mistake, so it is logged and answered 500
  * without echoing its message back to the client.
  */
 export function sendServiceError(res: express.Response, error: unknown, context: string): void {
@@ -50,6 +53,10 @@ export function sendServiceError(res: express.Response, error: unknown, context:
   }
   if (error instanceof DuplicateSlugError) {
     sendError(res, 409, "slug_taken", error.message);
+    return;
+  }
+  if (error instanceof FeedNotFoundError) {
+    sendError(res, 404, "feed_not_found", error.message);
     return;
   }
   console.error(context, error);
@@ -81,11 +88,34 @@ export function createFeedHandler(req: Request<Dependencies>, res: express.Respo
   })();
 }
 
+/**
+ * Deletes a feed and its entries.
+ *
+ * 204 rather than the deleted representation: the resource is gone, and there is
+ * nothing left to describe that the caller did not already hold.
+ */
+export function deleteFeedHandler(req: Request<Dependencies>, res: express.Response): void {
+  void (async () => {
+    const slug = pathParam(req.params.slug);
+    if (slug === undefined) {
+      sendError(res, 404, "feed_not_found", "No feed was named in the request");
+      return;
+    }
+    try {
+      await deleteFeed(req.deps.db, slug);
+      res.status(204).end();
+    } catch (error) {
+      sendServiceError(res, error, `Failed to delete feed "${slug}"`);
+    }
+  })();
+}
+
 const ApiFeedsController: Controller<Dependencies> = {
   basePath: "/api/feeds",
   routes: [
     { path: "/", method: "GET", handler: listFeedsHandler },
     { path: "/", method: "POST", handler: createFeedHandler },
+    { path: "/:slug", method: "DELETE", handler: deleteFeedHandler },
   ],
 };
 

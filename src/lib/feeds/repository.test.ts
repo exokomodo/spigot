@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import Database, { loadDatabase } from "../database.js";
 import {
   DEFAULT_ENTRY_LIMIT,
+  deleteFeedBySlug,
   findEntriesByFeedId,
   findFeedBySlug,
   findFeedWithEntries,
@@ -126,6 +127,56 @@ describe("findEntriesByFeedId", () => {
     const db = await openMigrated();
     const feedId = await insertFeed(db, "empty");
     expect(await findEntriesByFeedId(db, feedId)).toEqual([]);
+  });
+});
+
+describe("deleteFeedBySlug", () => {
+  it("removes the feed and reports that it did", async () => {
+    const db = await openMigrated();
+    await insertFeed(db, "tech");
+    expect(await deleteFeedBySlug(db, "tech")).toBe(true);
+    expect(await findFeedBySlug(db, "tech")).toBeUndefined();
+  });
+
+  it("reports false for a slug that names nothing", async () => {
+    const db = await openMigrated();
+    expect(await deleteFeedBySlug(db, "nope")).toBe(false);
+  });
+
+  /*
+   * The cascade is only real if the connection asked for foreign keys, which
+   * `loadDatabase` does and which `openMigrated` above deliberately goes
+   * through. Without the pragma this passes the delete and silently orphans
+   * every entry, so this asserts the pragma as much as the schema.
+   */
+  it("takes the feed's entries with it", async () => {
+    const db = await openMigrated();
+    const feedId = await insertFeed(db, "tech");
+    await insertEntry(db, feedId, "one", "2026-01-01T00:00:00.000Z");
+    await insertEntry(db, feedId, "two", "2026-02-01T00:00:00.000Z");
+
+    await deleteFeedBySlug(db, "tech");
+
+    expect(await db.instance.get("SELECT count(*) AS n FROM entries")).toMatchObject({ n: 0 });
+  });
+
+  it("leaves another feed's entries alone", async () => {
+    const db = await openMigrated();
+    const tech = await insertFeed(db, "tech");
+    const food = await insertFeed(db, "food");
+    await insertEntry(db, tech, "tech-1", "2026-01-01T00:00:00.000Z");
+    await insertEntry(db, food, "food-1", "2026-01-01T00:00:00.000Z");
+
+    await deleteFeedBySlug(db, "tech");
+
+    expect((await findEntriesByFeedId(db, food)).map((entry) => entry.guid)).toEqual(["food-1"]);
+  });
+
+  it("does not interpret the slug as SQL", async () => {
+    const db = await openMigrated();
+    await insertFeed(db, "tech");
+    expect(await deleteFeedBySlug(db, "' OR 1=1 --")).toBe(false);
+    expect(await findFeedBySlug(db, "tech")).toBeDefined();
   });
 });
 

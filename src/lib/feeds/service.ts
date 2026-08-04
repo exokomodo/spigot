@@ -6,6 +6,7 @@ import {
   FeedSummaryRow,
   NewFeed,
   createFeed,
+  deleteFeedBySlug,
   listFeedSummaries,
 } from "./repository.js";
 import { toSlug } from "./slug.js";
@@ -131,6 +132,36 @@ export async function createFeedFromRequest(db: Database, body: unknown): Promis
 /** Every feed with its entry count, newest first. */
 export async function listFeeds(db: Database): Promise<readonly FeedSummaryRow[]> {
   return listFeedSummaries(db);
+}
+
+/**
+ * Raised when a slug names no feed, so callers can answer 404 rather than 500.
+ *
+ * It lives here rather than beside the entry code that first needed it because
+ * the fact it reports is about a feed, and both services now raise it. The entry
+ * service re-exports it so its existing importers do not have to care.
+ */
+export class FeedNotFoundError extends Error {
+  readonly slug: string;
+
+  constructor(slug: string) {
+    super(`No feed with the slug "${slug}" exists`);
+    this.name = "FeedNotFoundError";
+    this.slug = slug;
+  }
+}
+
+/**
+ * Deletes a feed and, by cascade, its entries.
+ *
+ * Throws `FeedNotFoundError` when the slug is unknown, so a second delete of the
+ * same feed — a double click, a stale page — is a 404 rather than a silent 200
+ * that claims to have done something.
+ */
+export async function deleteFeed(db: Database, slug: string): Promise<void> {
+  if (!(await deleteFeedBySlug(db, slug))) {
+    throw new FeedNotFoundError(slug);
+  }
 }
 
 export { DuplicateSlugError };

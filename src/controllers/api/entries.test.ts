@@ -77,6 +77,25 @@ function post(port: number, path: string, body: unknown): Promise<Result> {
   });
 }
 
+function del(port: number, path: string): Promise<Result> {
+  return new Promise((resolve, reject) => {
+    const req = http.request({ host: "127.0.0.1", port, path, method: "DELETE" }, (res) => {
+      const chunks: Buffer[] = [];
+      res.on("data", (chunk: Buffer) => chunks.push(chunk));
+      res.on("end", () => {
+        const text = Buffer.concat(chunks).toString("utf8");
+        resolve({
+          status: res.statusCode ?? 0,
+          headers: res.headers,
+          json: text.length > 0 ? (JSON.parse(text) as Record<string, unknown>) : {},
+        });
+      });
+    });
+    req.on("error", reject);
+    req.end();
+  });
+}
+
 const valid = { url: "https://example.test/a", title: "A post" };
 
 describe("POST /api/feeds/:slug/entries", () => {
@@ -157,5 +176,76 @@ describe("POST /api/feeds/:slug/entries", () => {
     const res = await post(port, "/api/feeds/tech/entries", valid);
     const entry = res.json.entry as { publishedAt: string };
     expect(Number.isNaN(new Date(entry.publishedAt).getTime())).toBe(false);
+  });
+});
+
+describe("DELETE /api/feeds/:slug/entries/:entryId", () => {
+  /** Creates a feed with one entry and hands back the id the route addresses. */
+  async function seedEntry(port: number, db: Database, slug: string): Promise<number> {
+    await createFeed(db, { slug, title: slug });
+    const res = await post(port, `/api/feeds/${slug}/entries`, valid);
+    return (res.json.entry as { id: number }).id;
+  }
+
+  it("deletes the entry and answers 204 with no body", async () => {
+    const { port, db } = await boot();
+    const id = await seedEntry(port, db, "tech");
+
+    const res = await del(port, `/api/feeds/tech/entries/${String(id)}`);
+
+    expect(res.status).toBe(204);
+    expect(res.json).toEqual({});
+    expect(await db.instance.get("SELECT count(*) AS n FROM entries")).toMatchObject({ n: 0 });
+  });
+
+  it("leaves the feed itself standing", async () => {
+    const { port, db } = await boot();
+    const id = await seedEntry(port, db, "tech");
+
+    await del(port, `/api/feeds/tech/entries/${String(id)}`);
+
+    expect(await db.instance.get("SELECT count(*) AS n FROM feeds")).toMatchObject({ n: 1 });
+  });
+
+  it("404s for a feed that does not exist", async () => {
+    const { port } = await boot();
+    const res = await del(port, "/api/feeds/nope/entries/1");
+    expect(res.status).toBe(404);
+    expect(res.json.error).toMatchObject({ code: "feed_not_found" });
+  });
+
+  it("404s for an entry that does not exist", async () => {
+    const { port, db } = await boot();
+    await createFeed(db, { slug: "tech", title: "Tech" });
+    const res = await del(port, "/api/feeds/tech/entries/999");
+    expect(res.status).toBe(404);
+    expect(res.json.error).toMatchObject({ code: "entry_not_found" });
+  });
+
+  it("404s an id that is not a number rather than 500ing on the query", async () => {
+    const { port, db } = await boot();
+    await createFeed(db, { slug: "tech", title: "Tech" });
+    const res = await del(port, "/api/feeds/tech/entries/banana");
+    expect(res.status).toBe(404);
+    expect(res.json.error).toMatchObject({ code: "entry_not_found" });
+  });
+
+  it("404s the second delete of the same entry", async () => {
+    const { port, db } = await boot();
+    const id = await seedEntry(port, db, "tech");
+    await del(port, `/api/feeds/tech/entries/${String(id)}`);
+    expect((await del(port, `/api/feeds/tech/entries/${String(id)}`)).status).toBe(404);
+  });
+
+  /* Ids are unique table-wide, so the feed in the path is what scopes them. */
+  it("will not delete an entry through another feed's path", async () => {
+    const { port, db } = await boot();
+    const id = await seedEntry(port, db, "two");
+    await createFeed(db, { slug: "one", title: "One" });
+
+    const res = await del(port, `/api/feeds/one/entries/${String(id)}`);
+
+    expect(res.status).toBe(404);
+    expect(await db.instance.get("SELECT count(*) AS n FROM entries")).toMatchObject({ n: 1 });
   });
 });

@@ -259,6 +259,44 @@ export async function createEntry(db: Database, entry: NewEntry): Promise<EntryR
   return created;
 }
 
+/**
+ * Deletes a feed, reporting whether there was one to delete.
+ *
+ * The entries go with it through the `ON DELETE CASCADE` on `entries.feed_id`,
+ * which is load-bearing rather than documentation: SQLite ignores foreign keys
+ * unless the connection asks for them, and `loadDatabase` runs
+ * `PRAGMA foreign_keys = ON` for exactly this kind of reason. Deleting the
+ * children by hand first would work too, but it would be a second place that has
+ * to learn about every future child table.
+ *
+ * Returning a boolean rather than throwing leaves "already gone" a fact for the
+ * service to decide about, the same way a missing row is `undefined` here.
+ */
+export async function deleteFeedBySlug(db: Database, slug: string): Promise<boolean> {
+  const result = await db.instance.run("DELETE FROM feeds WHERE slug = ?", [slug]);
+  return (result.changes ?? 0) > 0;
+}
+
+/**
+ * Deletes one entry from one feed, reporting whether there was one to delete.
+ *
+ * `feed_id` is in the WHERE clause alongside the id on purpose. Ids are unique
+ * across the table, so matching on the id alone would let a request aimed at one
+ * feed's URL remove another feed's entry — and the feed in the path is the only
+ * claim of ownership such a request makes.
+ */
+export async function deleteEntryById(
+  db: Database,
+  feedId: number,
+  entryId: number
+): Promise<boolean> {
+  const result = await db.instance.run("DELETE FROM entries WHERE id = ? AND feed_id = ?", [
+    entryId,
+    feedId,
+  ]);
+  return (result.changes ?? 0) > 0;
+}
+
 /** Loads a feed and its entries in one call, or `undefined` if the slug is unknown. */
 export async function findFeedWithEntries(
   db: Database,

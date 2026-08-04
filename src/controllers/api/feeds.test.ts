@@ -207,3 +207,57 @@ describe("POST /api/feeds", () => {
     expect(res.body.feed).toMatchObject({ title: "<script>alert(1)</script>" });
   });
 });
+
+describe("DELETE /api/feeds/:slug", () => {
+  it("deletes the feed and answers 204 with no body", async () => {
+    const { port } = await boot();
+    await call(port, "POST", "/api/feeds", { title: "Tech Weekly" });
+
+    const res = await call(port, "DELETE", "/api/feeds/tech-weekly");
+
+    expect(res.status).toBe(204);
+    expect(res.body).toEqual({});
+    expect((await call(port, "GET", "/api/feeds")).body.feeds).toEqual([]);
+  });
+
+  it("answers 404 for a slug that names nothing", async () => {
+    const { port } = await boot();
+    const res = await call(port, "DELETE", "/api/feeds/nope");
+    expect(res.status).toBe(404);
+    expect(res.body.error).toMatchObject({ code: "feed_not_found" });
+  });
+
+  it("answers 404 rather than 204 the second time", async () => {
+    const { port } = await boot();
+    await call(port, "POST", "/api/feeds", { title: "Tech" });
+    await call(port, "DELETE", "/api/feeds/tech");
+    expect((await call(port, "DELETE", "/api/feeds/tech")).status).toBe(404);
+  });
+
+  it("leaves the other feeds alone", async () => {
+    const { port } = await boot();
+    await call(port, "POST", "/api/feeds", { title: "Tech" });
+    await call(port, "POST", "/api/feeds", { title: "Food" });
+
+    await call(port, "DELETE", "/api/feeds/tech");
+
+    const feeds = (await call(port, "GET", "/api/feeds")).body.feeds as { slug: string }[];
+    expect(feeds.map((feed) => feed.slug)).toEqual(["food"]);
+  });
+
+  it("takes the feed's entries with it", async () => {
+    const { port, db } = await boot();
+    const created = await call(port, "POST", "/api/feeds", { title: "Tech" });
+    const feed = created.body.feed as { id: number };
+    await db.instance.run("INSERT INTO entries (feed_id, guid, url, title) VALUES (?, ?, ?, ?)", [
+      feed.id,
+      "g",
+      "https://example.test/g",
+      "A post",
+    ]);
+
+    await call(port, "DELETE", "/api/feeds/tech");
+
+    expect(await db.instance.get("SELECT count(*) AS n FROM entries")).toMatchObject({ n: 0 });
+  });
+});

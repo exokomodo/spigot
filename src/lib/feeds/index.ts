@@ -16,6 +16,8 @@ export {
   DuplicateSlugError,
   createEntry,
   createFeed,
+  deleteEntryById,
+  deleteFeedBySlug,
   findEntriesByFeedId,
   findFeedBySlug,
   findFeedWithEntries,
@@ -25,9 +27,11 @@ export { SLUG_MAX_LENGTH, SLUG_PATTERN, toSlug } from "./slug.js";
 export type { ValidationIssue } from "./service.js";
 export {
   DESCRIPTION_MAX_LENGTH,
+  FeedNotFoundError,
   TITLE_MAX_LENGTH,
   ValidationError,
   createFeedFromRequest,
+  deleteFeed,
   listFeeds,
   parseNewFeed,
 } from "./service.js";
@@ -37,8 +41,10 @@ export {
   ENTRY_GUID_MAX_LENGTH,
   ENTRY_TITLE_MAX_LENGTH,
   ENTRY_URL_MAX_LENGTH,
-  FeedNotFoundError,
+  EntryNotFoundError,
   createEntryFromRequest,
+  deleteEntryFromRequest,
+  parseEntryId,
   parseNewEntry,
 } from "./entry-service.js";
 export {

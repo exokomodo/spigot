@@ -3,13 +3,16 @@ import Dependencies from "../lib/dependencies.js";
 import { render } from "../lib/html/template.js";
 import {
   DuplicateSlugError,
+  FeedNotFoundError,
   ValidationError,
   createFeedFromRequest,
+  deleteFeed,
   listFeeds,
 } from "../lib/feeds/service.js";
 import { renderFeedRows, renderIndexPage, renderValidationErrors } from "../lib/feeds/views.js";
 import { Controller } from "../lib/rest/controller.js";
 import Request from "../lib/rest/request.js";
+import { pathParam } from "./feeds.js";
 
 /**
  * The browser-facing pages. These share the service layer with the JSON API and
@@ -84,11 +87,53 @@ export function createFeedFragmentHandler(req: Request<Dependencies>, res: expre
   })();
 }
 
+/**
+ * Deletes a feed and returns the refreshed table body.
+ *
+ * The route lives on this controller rather than beside the feed page because
+ * the fragment it answers with is the index's table body: the reader pressing
+ * the button is on `/`, and the list they are looking at is what has to change.
+ * Nothing has to be cleared from the row itself — the whole body is replaced.
+ */
+export function deleteFeedFragmentHandler(req: Request<Dependencies>, res: express.Response): void {
+  void (async () => {
+    const slug = pathParam(req.params.slug);
+    if (slug === undefined) {
+      retargetToErrors(res, 404).send(
+        renderValidationErrors([{ field: "feed", message: "was not named in the request" }])
+      );
+      return;
+    }
+    try {
+      await deleteFeed(req.deps.db, slug);
+      const rows = await listFeeds(req.deps.db);
+      res
+        .set("Content-Type", HTML_CONTENT_TYPE)
+        .send(`${renderFeedRows(rows).html}\n${render("errors-cleared", {})}`);
+    } catch (error) {
+      if (error instanceof FeedNotFoundError) {
+        // Reachable from a page listing a feed someone else has since removed,
+        // so it is the reader's view that is stale rather than their request
+        // that is wrong.
+        retargetToErrors(res, 404).send(
+          renderValidationErrors([{ field: "feed", message: "no longer exists" }])
+        );
+        return;
+      }
+      console.error(`Failed to delete the feed "${slug}"`, error);
+      retargetToErrors(res, 500).send(
+        renderValidationErrors([{ field: "feed", message: "could not be deleted" }])
+      );
+    }
+  })();
+}
+
 const PagesController: Controller<Dependencies> = {
   basePath: "/",
   routes: [
     { path: "/", method: "GET", handler: indexHandler },
     { path: "/feeds", method: "POST", handler: createFeedFragmentHandler },
+    { path: "/feeds/:slug", method: "DELETE", handler: deleteFeedFragmentHandler },
   ],
 };
 

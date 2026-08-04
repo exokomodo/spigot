@@ -2,8 +2,10 @@ import express from "express";
 import Dependencies from "../../lib/dependencies.js";
 import {
   DuplicateGuidError,
+  EntryNotFoundError,
   FeedNotFoundError,
   createEntryFromRequest,
+  deleteEntryFromRequest,
 } from "../../lib/feeds/entry-service.js";
 import { toEntryJson } from "../../lib/feeds/presenter.js";
 import { ValidationError } from "../../lib/feeds/service.js";
@@ -28,7 +30,7 @@ function sendError(
 /**
  * Turns a thrown error into a response.
  *
- * The three the service raises deliberately become 4xx; anything else is a bug
+ * The ones the service raises deliberately become 4xx; anything else is a bug
  * here rather than a caller mistake, so it is logged and answered 500 without
  * echoing its message back.
  */
@@ -39,6 +41,10 @@ export function sendEntryError(res: express.Response, error: unknown, context: s
   }
   if (error instanceof FeedNotFoundError) {
     sendError(res, 404, "feed_not_found", error.message);
+    return;
+  }
+  if (error instanceof EntryNotFoundError) {
+    sendError(res, 404, "entry_not_found", error.message);
     return;
   }
   if (error instanceof DuplicateGuidError) {
@@ -68,9 +74,30 @@ export function createEntryHandler(req: Request<Dependencies>, res: express.Resp
   })();
 }
 
+/** Deletes one entry from one feed, answering 204 with nothing left to describe. */
+export function deleteEntryHandler(req: Request<Dependencies>, res: express.Response): void {
+  void (async () => {
+    const slug = pathParam(req.params.slug);
+    const entryId = pathParam(req.params.entryId);
+    if (slug === undefined || entryId === undefined) {
+      sendError(res, 404, "entry_not_found", "No entry was named in the request");
+      return;
+    }
+    try {
+      await deleteEntryFromRequest(req.deps.db, slug, entryId);
+      res.status(204).end();
+    } catch (error) {
+      sendEntryError(res, error, `Failed to delete entry "${entryId}" from feed "${slug}"`);
+    }
+  })();
+}
+
 const ApiEntriesController: Controller<Dependencies> = {
   basePath: "/api/feeds",
-  routes: [{ path: "/:slug/entries", method: "POST", handler: createEntryHandler }],
+  routes: [
+    { path: "/:slug/entries", method: "POST", handler: createEntryHandler },
+    { path: "/:slug/entries/:entryId", method: "DELETE", handler: deleteEntryHandler },
+  ],
 };
 
 export default ApiEntriesController;
