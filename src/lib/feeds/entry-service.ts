@@ -6,9 +6,10 @@ import {
   FeedRow,
   NewEntry,
   createEntry,
+  deleteEntryById,
   findFeedBySlug,
 } from "./repository.js";
-import { ValidationError, ValidationIssue } from "./service.js";
+import { FeedNotFoundError, ValidationError, ValidationIssue } from "./service.js";
 
 /**
  * Validation and creation for entries, shared by the JSON API and the HTML
@@ -188,15 +189,55 @@ export function parseNewEntry(feed: FeedRow, body: unknown, now: Date = new Date
   };
 }
 
-/** Raised when the slug in the path names no feed, so callers can answer 404. */
-export class FeedNotFoundError extends Error {
-  readonly slug: string;
+/** Raised when the id in the path names no entry in the feed, so callers can answer 404. */
+export class EntryNotFoundError extends Error {
+  /** As it appeared in the path, since an unparseable id is one of the ways to get here. */
+  readonly entryId: string;
 
-  constructor(slug: string) {
-    super(`No feed with the slug "${slug}" exists`);
-    this.name = "FeedNotFoundError";
-    this.slug = slug;
+  constructor(entryId: string) {
+    super(`No entry "${entryId}" exists in this feed`);
+    this.name = "EntryNotFoundError";
+    this.entryId = entryId;
   }
+}
+
+/**
+ * Reads a row id out of a path segment, or `undefined` when the segment is not
+ * one.
+ *
+ * Digits only, rather than `Number()` on its own: `" 7 "`, `"7e0"` and `"0x7"`
+ * all convert to 7, so a URL naming an entry that way names it by coincidence,
+ * and answering it would make three spellings of every entry's address.
+ */
+export function parseEntryId(raw: string): number | undefined {
+  if (!/^\d+$/.test(raw)) {
+    return undefined;
+  }
+  const id = Number(raw);
+  return Number.isSafeInteger(id) && id > 0 ? id : undefined;
+}
+
+/**
+ * Deletes one entry from the feed named by `slug`, returning the feed it left.
+ *
+ * Throws `FeedNotFoundError` or `EntryNotFoundError`, which the controllers both
+ * answer 404. The feed is resolved first and the delete is scoped to it, so an
+ * id belonging to another feed is a miss here rather than a deletion there.
+ */
+export async function deleteEntryFromRequest(
+  db: Database,
+  slug: string,
+  rawEntryId: string
+): Promise<FeedRow> {
+  const feed = await findFeedBySlug(db, slug);
+  if (feed === undefined) {
+    throw new FeedNotFoundError(slug);
+  }
+  const entryId = parseEntryId(rawEntryId);
+  if (entryId === undefined || !(await deleteEntryById(db, feed.id, entryId))) {
+    throw new EntryNotFoundError(rawEntryId);
+  }
+  return feed;
 }
 
 /**
@@ -218,4 +259,4 @@ export async function createEntryFromRequest(
   return { feed, entry: await createEntry(db, parseNewEntry(feed, body, now)) };
 }
 
-export { DuplicateGuidError };
+export { DuplicateGuidError, FeedNotFoundError };

@@ -16,6 +16,7 @@ interface Harness {
 interface HttpResponse {
   readonly status: number;
   readonly contentType: string | undefined;
+  readonly headers: http.IncomingHttpHeaders;
   readonly body: string;
 }
 
@@ -40,9 +41,9 @@ const boot = async (): Promise<Harness> => {
   return { port: address.port, db };
 };
 
-const request = (port: number, path: string): Promise<HttpResponse> =>
+const call = (port: number, method: string, path: string): Promise<HttpResponse> =>
   new Promise((resolve, reject) => {
-    const req = http.get({ host: "127.0.0.1", port, path }, (res) => {
+    const req = http.request({ host: "127.0.0.1", port, path, method }, (res) => {
       const chunks: string[] = [];
       res.setEncoding("utf8");
       res.on("data", (chunk: string) => chunks.push(chunk));
@@ -50,12 +51,16 @@ const request = (port: number, path: string): Promise<HttpResponse> =>
         resolve({
           status: res.statusCode ?? 0,
           contentType: res.headers["content-type"],
+          headers: res.headers,
           body: chunks.join(""),
         })
       );
     });
     req.on("error", reject);
+    req.end();
   });
+
+const request = (port: number, path: string): Promise<HttpResponse> => call(port, "GET", path);
 
 afterEach(async () => {
   await Promise.all(
@@ -216,5 +221,115 @@ describe("the feed page", () => {
     const response = await request(port, "/feeds/x");
     expect(response.body).not.toContain("<script>alert(1)</script>");
     expect(response.body).toContain("&lt;script&gt;");
+  });
+});
+
+/** The id of the single entry `seed` inserts, which the delete routes address by. */
+const seededEntryId = async (db: Database): Promise<number> => {
+  const row = await db.instance.get<{ id: number }>("SELECT id FROM entries LIMIT 1");
+  if (row === undefined) {
+    throw new Error("Expected the seeded entry to exist");
+  }
+  return row.id;
+};
+
+describe("DELETE /feeds/:slug/entries/:entryId", () => {
+  it("returns the refreshed entry list without the deleted entry", async () => {
+    const { port, db } = await boot();
+    await seed(db, "tech");
+    const entryId = await seededEntryId(db);
+
+    const response = await call(port, "DELETE", `/feeds/tech/entries/${String(entryId)}`);
+
+    expect(response.status).toBe(200);
+    expect(response.contentType).toContain("text/html");
+    expect(response.body).not.toContain("Shipping &amp; Scaling");
+    // The list, not the whole page: this is swapped into #entry-list.
+    expect(response.body).not.toContain("<!doctype html>");
+  });
+
+  it("falls back to the empty state when the last entry goes", async () => {
+    const { port, db } = await boot();
+    await seed(db, "tech");
+    const entryId = await seededEntryId(db);
+
+    const response = await call(port, "DELETE", `/feeds/tech/entries/${String(entryId)}`);
+
+    expect(response.body).toContain("No entries yet");
+    expect(response.body).toContain("/api/feeds/tech/entries");
+  });
+
+  it("clears the error box out of band after a success", async () => {
+    const { port, db } = await boot();
+    await seed(db, "tech");
+    const entryId = await seededEntryId(db);
+
+    const response = await call(port, "DELETE", `/feeds/tech/entries/${String(entryId)}`);
+
+    expect(response.body).toContain('hx-swap-oob="outerHTML"');
+  });
+
+  it("really removes the entry, and leaves the feed standing", async () => {
+    const { port, db } = await boot();
+    await seed(db, "tech");
+    const entryId = await seededEntryId(db);
+
+    await call(port, "DELETE", `/feeds/tech/entries/${String(entryId)}`);
+
+    expect(await db.instance.get("SELECT count(*) AS n FROM entries")).toMatchObject({ n: 0 });
+    expect(await db.instance.get("SELECT count(*) AS n FROM feeds")).toMatchObject({ n: 1 });
+    expect((await request(port, "/feeds/tech")).status).toBe(200);
+  });
+
+  it("answers 404 and retargets at the error box for an entry already gone", async () => {
+    const { port, db } = await boot();
+    await seed(db, "tech");
+    const entryId = await seededEntryId(db);
+    await call(port, "DELETE", `/feeds/tech/entries/${String(entryId)}`);
+
+    const response = await call(port, "DELETE", `/feeds/tech/entries/${String(entryId)}`);
+
+    expect(response.status).toBe(404);
+    expect(response.headers["hx-retarget"]).toBe("#errors");
+    expect(response.headers["hx-reswap"]).toBe("innerHTML");
+    expect(response.body).toContain("no longer exists");
+  });
+
+  it("answers 404 for a feed that does not exist", async () => {
+    const { port } = await boot();
+    const response = await call(port, "DELETE", "/feeds/nope/entries/1");
+    expect(response.status).toBe(404);
+    expect(response.body).toContain("does not exist");
+  });
+
+  it("answers 404 for an id that is not a number, rather than 500", async () => {
+    const { port, db } = await boot();
+    await seed(db, "tech");
+    expect((await call(port, "DELETE", "/feeds/tech/entries/banana")).status).toBe(404);
+  });
+
+  /* Ids are unique table-wide, so the feed in the path has to constrain them. */
+  it("will not delete an entry through another feed's URL", async () => {
+    const { port, db } = await boot();
+    await seed(db, "tech");
+    await db.instance.run("INSERT INTO feeds (slug, title) VALUES (?, ?)", ["other", "Other"]);
+    const entryId = await seededEntryId(db);
+
+    const response = await call(port, "DELETE", `/feeds/other/entries/${String(entryId)}`);
+
+    expect(response.status).toBe(404);
+    expect(await db.instance.get("SELECT count(*) AS n FROM entries")).toMatchObject({ n: 1 });
+  });
+
+  it("renders the delete control on the feed page, confirmation and all", async () => {
+    const { port, db } = await boot();
+    await seed(db, "tech");
+    const entryId = await seededEntryId(db);
+    const body = (await request(port, "/feeds/tech")).body;
+
+    expect(body).toContain(`hx-delete="/feeds/tech/entries/${String(entryId)}"`);
+    expect(body).toContain('hx-target="#entry-list"');
+    expect(body).toContain("hx-confirm=");
+    expect(body).toContain("aria-label=");
   });
 });

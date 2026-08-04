@@ -69,6 +69,30 @@
   button:hover {
     background: color-mix(in srgb, currentColor 14%, transparent);
   }
+  /*
+   * The icon-only delete control: quiet enough that a table of feeds does not
+   * read as a row of buttons, but never quiet about focus. It carries no text,
+   * so `aria-label` is its whole name and `:focus-visible` is the only thing
+   * telling a keyboard reader which row they are about to remove.
+   */
+  button.delete {
+    display: inline-flex;
+    padding: 0.3rem;
+    border-color: transparent;
+    background: transparent;
+    color: var(--muted);
+    line-height: 0;
+  }
+  button.delete:hover {
+    border-color: var(--border);
+    background: color-mix(in srgb, currentColor 12%, transparent);
+    color: inherit;
+  }
+  button.delete:focus-visible {
+    outline: 2px solid currentColor;
+    outline-offset: 2px;
+    color: inherit;
+  }
   table {
     width: 100%;
     border-collapse: collapse;
@@ -89,6 +113,13 @@
   td.count {
     text-align: right;
     font-variant-numeric: tabular-nums;
+  }
+  /* `width: 1%` collapses the column onto the button, leaving the rest to the feed. */
+  th.actions,
+  td.actions {
+    text-align: right;
+    width: 1%;
+    white-space: nowrap;
   }
   .description {
     display: block;
@@ -115,7 +146,13 @@
     margin: 0;
     padding-left: 1.1rem;
   }
-  .htmx-request button {
+  /*
+   * htmx marks the element that issued the request. A form gets the class and
+   * its button is inside it; a delete button issues its own request and gets the
+   * class itself, so both spellings are needed for the same feedback.
+   */
+  .htmx-request button,
+  button.htmx-request {
     opacity: 0.6;
     pointer-events: none;
   }
@@ -145,8 +182,16 @@
     padding: 0;
   }
   li.entry {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.75rem;
     padding: 0.9rem 0;
     border-bottom: 1px solid var(--border);
+  }
+  /* `min-width: 0` lets a long unbroken URL wrap instead of widening the row. */
+  .entry-body {
+    flex: 1;
+    min-width: 0;
   }
   .entry-title {
     font-size: 1.05rem;

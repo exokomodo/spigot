@@ -38,6 +38,23 @@ export function renderLink(url: string, text: string): SafeHtml {
   return safe(render("link", { href: url, text }));
 }
 
+/**
+ * The trash button that deletes one thing and swaps the refreshed list in.
+ *
+ * `label` and `confirm` both name the thing being deleted, so both carry a
+ * stored title. Neither is wrapped in `safe()`: `aria-label` is a quoted
+ * attribute and `hx-confirm` is read as text by the browser's own dialog, so
+ * escaping is exactly what each position needs.
+ */
+function renderDeleteButton(
+  path: string,
+  target: string,
+  label: string,
+  confirm: string
+): SafeHtml {
+  return safe(render("delete-button", { path, target, label, confirm }));
+}
+
 /** One row of the feed table. */
 export function renderFeedRow(row: FeedSummaryRow): SafeHtml {
   return safe(
@@ -48,6 +65,14 @@ export function renderFeedRow(row: FeedSummaryRow): SafeHtml {
       pagePath: feedPagePath(row.slug),
       feedUrl: feedPath(row.slug),
       entryCount: row.entry_count,
+      // Deleting a feed takes its entries with it, which is not obvious from a
+      // trash can on a row, so the confirmation says so before it happens.
+      deleteButton: renderDeleteButton(
+        feedPagePath(row.slug),
+        "#feed-rows",
+        `Delete the feed ${row.title}`,
+        `Delete the feed "${row.title}"? This also deletes its entries.`
+      ),
     })
   );
 }
@@ -92,8 +117,11 @@ export function formatPublishedAt(value: string | null): string {
  * are rendered as text: `render` escapes them, and neither is wrapped in
  * `safe()`. They still go out as CDATA in the RSS, which is correct there and
  * unaffected by this.
+ *
+ * The feed's slug is a parameter because an entry knows its `feed_id` and not
+ * the name that feed is addressed by, and the delete button needs an address.
  */
-export function renderEntryRow(row: EntryRow): SafeHtml {
+export function renderEntryRow(slug: string, row: EntryRow): SafeHtml {
   const body = row.description ?? row.content ?? "";
   return safe(
     render("entry-row", {
@@ -101,6 +129,12 @@ export function renderEntryRow(row: EntryRow): SafeHtml {
       publishedAt: formatPublishedAt(row.published_at),
       author: row.author === null ? "" : ` · ${row.author}`,
       description: body,
+      deleteButton: renderDeleteButton(
+        `${feedPagePath(slug)}/entries/${String(row.id)}`,
+        "#entry-list",
+        `Delete the entry ${row.title}`,
+        `Delete the entry "${row.title}"?`
+      ),
     })
   );
 }
@@ -110,7 +144,7 @@ export function renderEntryRows(slug: string, rows: readonly EntryRow[]): SafeHt
   if (rows.length === 0) {
     return safe(render("entries-empty", { slug }));
   }
-  return joinHtml(rows.map(renderEntryRow));
+  return joinHtml(rows.map((row) => renderEntryRow(slug, row)));
 }
 
 /** The feed's own site link, omitted entirely when it has none. */

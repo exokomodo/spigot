@@ -5,6 +5,7 @@ import {
   NewEntry,
   createEntry,
   createFeed,
+  deleteEntryById,
   findEntriesByFeedId,
 } from "./repository.js";
 
@@ -114,5 +115,54 @@ describe("createEntry", () => {
     );
     const entries = await findEntriesByFeedId(db, feed.id);
     expect(entries.map((row) => row.guid)).toEqual(["new", "old"]);
+  });
+});
+
+describe("deleteEntryById", () => {
+  it("removes the entry and reports that it did", async () => {
+    const db = await boot();
+    const feed = await createFeed(db, { slug: "tech", title: "Tech" });
+    const entry = await createEntry(db, newEntry(feed.id));
+
+    expect(await deleteEntryById(db, feed.id, entry.id)).toBe(true);
+    expect(await findEntriesByFeedId(db, feed.id)).toEqual([]);
+  });
+
+  it("leaves the feed's other entries alone", async () => {
+    const db = await boot();
+    const feed = await createFeed(db, { slug: "tech", title: "Tech" });
+    const doomed = await createEntry(db, newEntry(feed.id, { guid: "doomed" }));
+    await createEntry(db, newEntry(feed.id, { guid: "kept", url: "https://example.test/b" }));
+
+    await deleteEntryById(db, feed.id, doomed.id);
+
+    expect((await findEntriesByFeedId(db, feed.id)).map((row) => row.guid)).toEqual(["kept"]);
+  });
+
+  it("reports false for an id that names nothing", async () => {
+    const db = await boot();
+    const feed = await createFeed(db, { slug: "tech", title: "Tech" });
+    expect(await deleteEntryById(db, feed.id, 999)).toBe(false);
+  });
+
+  /* The reason `feed_id` is in the WHERE clause: ids are unique table-wide. */
+  it("refuses an id that belongs to a different feed", async () => {
+    const db = await boot();
+    const one = await createFeed(db, { slug: "one", title: "One" });
+    const two = await createFeed(db, { slug: "two", title: "Two" });
+    const entry = await createEntry(db, newEntry(two.id));
+
+    expect(await deleteEntryById(db, one.id, entry.id)).toBe(false);
+    expect(await findEntriesByFeedId(db, two.id)).toHaveLength(1);
+  });
+
+  it("leaves the feed itself standing", async () => {
+    const db = await boot();
+    const feed = await createFeed(db, { slug: "tech", title: "Tech" });
+    const entry = await createEntry(db, newEntry(feed.id));
+
+    await deleteEntryById(db, feed.id, entry.id);
+
+    expect(await db.instance.get("SELECT count(*) AS n FROM feeds")).toMatchObject({ n: 1 });
   });
 });

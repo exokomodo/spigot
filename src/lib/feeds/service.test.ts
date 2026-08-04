@@ -2,9 +2,11 @@ import { afterEach, describe, expect, it } from "vitest";
 import Database, { loadDatabase } from "../database.js";
 import { DuplicateSlugError } from "./repository.js";
 import {
+  FeedNotFoundError,
   TITLE_MAX_LENGTH,
   ValidationError,
   createFeedFromRequest,
+  deleteFeed,
   listFeeds,
   parseNewFeed,
 } from "./service.js";
@@ -221,5 +223,50 @@ describe("listFeeds", () => {
     const counts = new Map((await listFeeds(db)).map((row) => [row.slug, row.entry_count]));
     expect(counts.get("a")).toBe(1);
     expect(counts.get("b")).toBe(1);
+  });
+});
+
+describe("deleteFeed", () => {
+  it("removes the feed from the listing", async () => {
+    const db = await open();
+    await createFeedFromRequest(db, { title: "Tech" });
+    await createFeedFromRequest(db, { title: "Food" });
+
+    await deleteFeed(db, "tech");
+
+    expect((await listFeeds(db)).map((row) => row.slug)).toEqual(["food"]);
+  });
+
+  it("raises FeedNotFoundError for a slug that names nothing", async () => {
+    const db = await open();
+    await expect(deleteFeed(db, "nope")).rejects.toBeInstanceOf(FeedNotFoundError);
+  });
+
+  /* A double click or a stale page must not report success for a second delete. */
+  it("raises FeedNotFoundError the second time the same feed is deleted", async () => {
+    const db = await open();
+    await createFeedFromRequest(db, { title: "Tech" });
+    await deleteFeed(db, "tech");
+    await expect(deleteFeed(db, "tech")).rejects.toBeInstanceOf(FeedNotFoundError);
+  });
+
+  it("names the slug it could not find", async () => {
+    const db = await open();
+    await expect(deleteFeed(db, "nope")).rejects.toMatchObject({ slug: "nope" });
+  });
+
+  it("takes the feed's entries with it", async () => {
+    const db = await open();
+    const tech = await createFeedFromRequest(db, { title: "Tech" });
+    await db.instance.run("INSERT INTO entries (feed_id, guid, url, title) VALUES (?, ?, ?, ?)", [
+      tech.id,
+      "g",
+      "https://example.com/g",
+      "g",
+    ]);
+
+    await deleteFeed(db, "tech");
+
+    expect(await db.instance.get("SELECT count(*) AS n FROM entries")).toMatchObject({ n: 0 });
   });
 });

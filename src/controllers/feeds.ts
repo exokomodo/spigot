@@ -2,8 +2,10 @@ import express from "express";
 import Dependencies from "../lib/dependencies.js";
 import {
   DuplicateGuidError,
+  EntryNotFoundError,
   FeedNotFoundError,
   createEntryFromRequest,
+  deleteEntryFromRequest,
 } from "../lib/feeds/entry-service.js";
 import { findFeedWithEntries, toRssFeed } from "../lib/feeds/index.js";
 import { ValidationError } from "../lib/feeds/service.js";
@@ -131,6 +133,51 @@ export function createEntryFragmentHandler(
   })();
 }
 
+/** Deletes one entry and returns the refreshed entry list. */
+export function deleteEntryFragmentHandler(
+  req: Request<Dependencies>,
+  res: express.Response
+): void {
+  void (async () => {
+    const slug = pathParam(req.params.slug);
+    const entryId = pathParam(req.params.entryId);
+    if (slug === undefined || entryId === undefined) {
+      retargetToErrors(res, 404).send(
+        renderValidationErrors([{ field: "entry", message: "was not named in the request" }])
+      );
+      return;
+    }
+    try {
+      await deleteEntryFromRequest(req.deps.db, slug, entryId);
+      const loaded = await findFeedWithEntries(req.deps.db, slug);
+      res
+        .set("Content-Type", HTML_CONTENT_TYPE)
+        .send(
+          `${renderEntryRows(slug, loaded?.entries ?? []).html}\n${render("errors-cleared", {})}`
+        );
+    } catch (error) {
+      if (error instanceof FeedNotFoundError) {
+        retargetToErrors(res, 404).send(
+          renderValidationErrors([{ field: "feed", message: "does not exist" }])
+        );
+        return;
+      }
+      if (error instanceof EntryNotFoundError) {
+        // Two people on the same page, or one person clicking twice: the entry
+        // is gone either way, and that is a 404 rather than a failure.
+        retargetToErrors(res, 404).send(
+          renderValidationErrors([{ field: "entry", message: "no longer exists" }])
+        );
+        return;
+      }
+      console.error(`Failed to delete entry "${entryId}" from feed "${slug}"`, error);
+      retargetToErrors(res, 500).send(
+        renderValidationErrors([{ field: "entry", message: "could not be deleted" }])
+      );
+    }
+  })();
+}
+
 /**
  * `/feeds/tech.xml` serves RSS; `/feeds/tech` serves the page a person reads.
  *
@@ -145,6 +192,7 @@ const FeedsController: Controller<Dependencies> = {
     rssRoute("/:slug.xml", feedChannel),
     { path: "/:slug", method: "GET", handler: feedPageHandler },
     { path: "/:slug/entries", method: "POST", handler: createEntryFragmentHandler },
+    { path: "/:slug/entries/:entryId", method: "DELETE", handler: deleteEntryFragmentHandler },
   ],
 };
 

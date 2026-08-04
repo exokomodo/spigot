@@ -1,6 +1,14 @@
-import { describe, expect, it } from "vitest";
-import { FeedNotFoundError, parseNewEntry } from "./entry-service.js";
-import { FeedRow } from "./repository.js";
+import { afterEach, describe, expect, it } from "vitest";
+import Database, { loadDatabase } from "../database.js";
+import {
+  EntryNotFoundError,
+  FeedNotFoundError,
+  createEntryFromRequest,
+  deleteEntryFromRequest,
+  parseEntryId,
+  parseNewEntry,
+} from "./entry-service.js";
+import { FeedRow, createFeed, findEntriesByFeedId } from "./repository.js";
 import { ValidationError } from "./service.js";
 
 const feed: FeedRow = {
@@ -184,5 +192,106 @@ describe("parseNewEntry", () => {
 describe("FeedNotFoundError", () => {
   it("carries the slug it could not find", () => {
     expect(new FeedNotFoundError("missing").slug).toBe("missing");
+  });
+});
+
+describe("EntryNotFoundError", () => {
+  it("carries the id it could not find, as it was written", () => {
+    expect(new EntryNotFoundError("banana").entryId).toBe("banana");
+  });
+});
+
+describe("parseEntryId", () => {
+  it("reads a plain decimal id", () => {
+    expect(parseEntryId("7")).toBe(7);
+    expect(parseEntryId("1234")).toBe(1234);
+  });
+
+  /*
+   * All of these convert to a number, and several convert to a real row id.
+   * Accepting them would give every entry several spellings of its address and
+   * let a request name a row it did not mean to.
+   */
+  it.each(["", " 7 ", "7e0", "0x7", "7.0", "+7", "-7", "0", "banana", "7; DROP TABLE entries"])(
+    "refuses %j",
+    (raw) => {
+      expect(parseEntryId(raw)).toBeUndefined();
+    }
+  );
+
+  it("refuses an id past the safe integer range", () => {
+    expect(parseEntryId("9007199254740993")).toBeUndefined();
+  });
+});
+
+describe("deleteEntryFromRequest", () => {
+  const databases: Database[] = [];
+
+  const open = async (): Promise<Database> => {
+    const db = await loadDatabase(":memory:");
+    databases.push(db);
+    return db;
+  };
+
+  afterEach(async () => {
+    await Promise.all(databases.splice(0).map((db) => db.instance.close()));
+  });
+
+  const valid = { url: "https://example.test/a", title: "A post" };
+
+  it("removes the entry and returns the feed it left", async () => {
+    const db = await open();
+    await createFeed(db, { slug: "tech", title: "Tech" });
+    const { entry } = await createEntryFromRequest(db, "tech", valid);
+
+    const feed = await deleteEntryFromRequest(db, "tech", String(entry.id));
+
+    expect(feed.slug).toBe("tech");
+    expect(await findEntriesByFeedId(db, feed.id)).toEqual([]);
+  });
+
+  it("raises FeedNotFoundError when the slug names nothing", async () => {
+    const db = await open();
+    await expect(deleteEntryFromRequest(db, "nope", "1")).rejects.toBeInstanceOf(FeedNotFoundError);
+  });
+
+  it("raises EntryNotFoundError when the id names nothing in the feed", async () => {
+    const db = await open();
+    await createFeed(db, { slug: "tech", title: "Tech" });
+    await expect(deleteEntryFromRequest(db, "tech", "999")).rejects.toBeInstanceOf(
+      EntryNotFoundError
+    );
+  });
+
+  it("raises EntryNotFoundError rather than querying on an id that is not one", async () => {
+    const db = await open();
+    await createFeed(db, { slug: "tech", title: "Tech" });
+    await expect(deleteEntryFromRequest(db, "tech", "banana")).rejects.toBeInstanceOf(
+      EntryNotFoundError
+    );
+  });
+
+  /* The whole reason the feed is resolved before the delete rather than after. */
+  it("will not delete an entry through another feed's slug", async () => {
+    const db = await open();
+    await createFeed(db, { slug: "one", title: "One" });
+    const two = await createFeed(db, { slug: "two", title: "Two" });
+    const { entry } = await createEntryFromRequest(db, "two", valid);
+
+    await expect(deleteEntryFromRequest(db, "one", String(entry.id))).rejects.toBeInstanceOf(
+      EntryNotFoundError
+    );
+    expect(await findEntriesByFeedId(db, two.id)).toHaveLength(1);
+  });
+
+  it("raises EntryNotFoundError the second time the same entry is deleted", async () => {
+    const db = await open();
+    await createFeed(db, { slug: "tech", title: "Tech" });
+    const { entry } = await createEntryFromRequest(db, "tech", valid);
+    await deleteEntryFromRequest(db, "tech", String(entry.id));
+
+    await expect(deleteEntryFromRequest(db, "tech", String(entry.id))).rejects.toBeInstanceOf(
+      EntryNotFoundError
+    );
   });
 });
