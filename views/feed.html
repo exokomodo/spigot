@@ -36,13 +36,16 @@
       </label>
       <label>
         Published
-        <input name="publishedAt" placeholder="Optional, defaults to now" />
+        <input name="publishedAt" type="datetime-local" />
       </label>
       <label>
         Description
         <input name="description" placeholder="Optional" />
       </label>
       <button type="submit">Add entry</button>
+      <p class="form-hint">
+        Published and description are optional; an entry with no publish date is dated now.
+      </p>
     </form>
     <div id="errors" role="alert"></div>
 
