@@ -1,4 +1,5 @@
 import Database from "../database.js";
+import { stripQueryString } from "../html/strip-query.js";
 import { SAFE_PROTOCOL_LIST, isSafeHttpUrl } from "../html/url.js";
 import {
   DuplicateGuidError,
@@ -26,8 +27,16 @@ function readString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
-function validateEntryUrl(raw: string | undefined, issues: ValidationIssue[]): string {
-  const url = raw?.trim() ?? "";
+function validateEntryUrl(
+  raw: string | undefined,
+  issues: ValidationIssue[],
+  stripQuery: boolean
+): string {
+  const trimmed = raw?.trim() ?? "";
+  // Stripped before the checks below rather than after, so the length limit and
+  // the scheme check both judge the URL that will actually be stored — a
+  // tracking-laden link is often over the limit only because of its query.
+  const url = stripQuery ? stripQueryString(trimmed) : trimmed;
   if (url.length === 0) {
     issues.push({ field: "url", message: "is required" });
   } else if (url.length > ENTRY_URL_MAX_LENGTH) {
@@ -127,22 +136,46 @@ function validateEnclosure(
 }
 
 /**
- * Validates an untrusted request body into a `NewEntry`.
+ * How to read a request, as opposed to what the request says.
  *
- * `now` is injectable so a test can assert the default publication date without
- * racing the clock.
+ * These are choices the transport makes on the caller's behalf, so they travel
+ * beside the body rather than inside it — a request cannot ask to be parsed
+ * differently by adding a field to the entry it is submitting.
  */
-export function parseNewEntry(feed: FeedRow, body: unknown, now: Date = new Date()): NewEntry {
+export interface NewEntryOptions {
+  /**
+   * Drop the query string from the entry url before validating and storing it.
+   *
+   * Off by default. Callers that predate the flag keep storing exactly the URL
+   * they send, and losing part of a URL is not something to do unasked.
+   */
+  readonly stripQuery?: boolean;
+  /** The clock, injectable so a test can assert the default publication date without racing it. */
+  readonly now?: Date;
+}
+
+/** Validates an untrusted request body into a `NewEntry`. */
+export function parseNewEntry(
+  feed: FeedRow,
+  body: unknown,
+  options: NewEntryOptions = {}
+): NewEntry {
   const fields: Record<string, unknown> =
     typeof body === "object" && body !== null ? (body as Record<string, unknown>) : {};
+  const now = options.now ?? new Date();
 
   const issues: ValidationIssue[] = [];
-  const url = validateEntryUrl(readString(fields.url), issues);
+  const url = validateEntryUrl(readString(fields.url), issues, options.stripQuery === true);
   const title = validateEntryTitle(readString(fields.title), issues);
   const publishedAt = validatePublishedAt(readString(fields.publishedAt), issues, now);
 
   // An entry with no guid of its own is identified by where it lives, which is
   // what `isPermaLink` means — so the default guid and the flag agree.
+  //
+  // `url` is the stripped one, because `validateEntryUrl` already ran. That
+  // ordering is the point: a permalink guid claims to be the entry's address,
+  // and one carrying a query the entry itself does not have would be a lie that
+  // also changes which entries count as duplicates.
   const rawGuid = readString(fields.guid)?.trim() ?? "";
   const guid = rawGuid.length > 0 ? rawGuid : url;
   if (guid.length > ENTRY_GUID_MAX_LENGTH) {
@@ -187,6 +220,54 @@ export function parseNewEntry(feed: FeedRow, body: unknown, now: Date = new Date
     publishedAt,
     ...enclosure,
   };
+}
+
+const TRUTHY_STRIP_VALUES: ReadonlySet<string> = new Set(["", "true", "1", "on"]);
+const FALSY_STRIP_VALUES: ReadonlySet<string> = new Set(["false", "0", "off"]);
+
+/** The accepted spellings, for the error a mistyped flag gets. */
+export const STRIP_FLAG_VALUE_LIST = "true, 1, on, false, 0 or off";
+
+/**
+ * Reads the `strip` flag a request may carry, defaulting to off.
+ *
+ * A value that is neither spelling raises rather than being read as false. A
+ * flag whose whole job is to remove something is the wrong place to guess: a
+ * typo would quietly store the tracking parameters the caller asked to drop,
+ * and nothing about the 201 would say so.
+ *
+ * `?strip` with no value arrives as an empty string and reads as on, since
+ * writing the flag at all is the request.
+ */
+export function parseStripFlag(raw: unknown): boolean {
+  if (raw === undefined) {
+    return false;
+  }
+  // Anything other than a single string is a repeated or nested parameter,
+  // which cannot be resolved into one answer and so is a mistake, not a value.
+  const value = typeof raw === "string" ? raw.trim().toLowerCase() : undefined;
+  if (value !== undefined && TRUTHY_STRIP_VALUES.has(value)) {
+    return true;
+  }
+  if (value !== undefined && FALSY_STRIP_VALUES.has(value)) {
+    return false;
+  }
+  throw new ValidationError([
+    { field: "strip", message: `must be ${STRIP_FLAG_VALUE_LIST}, or be left off` },
+  ]);
+}
+
+/**
+ * Reads the `strip` flag out of a submitted form body.
+ *
+ * The HTML form has nowhere else to put it — a form posts fields, not query
+ * strings — so the flag arrives beside the entry's own fields and is picked
+ * back out here rather than left for `parseNewEntry` to mistake for one.
+ */
+export function stripFlagFromBody(body: unknown): boolean {
+  const fields: Record<string, unknown> =
+    typeof body === "object" && body !== null ? (body as Record<string, unknown>) : {};
+  return parseStripFlag(fields.strip);
 }
 
 /** Raised when the id in the path names no entry in the feed, so callers can answer 404. */
@@ -250,13 +331,13 @@ export async function createEntryFromRequest(
   db: Database,
   slug: string,
   body: unknown,
-  now: Date = new Date()
+  options: NewEntryOptions = {}
 ): Promise<{ readonly feed: FeedRow; readonly entry: EntryRow }> {
   const feed = await findFeedBySlug(db, slug);
   if (feed === undefined) {
     throw new FeedNotFoundError(slug);
   }
-  return { feed, entry: await createEntry(db, parseNewEntry(feed, body, now)) };
+  return { feed, entry: await createEntry(db, parseNewEntry(feed, body, options)) };
 }
 
 export { DuplicateGuidError, FeedNotFoundError };
