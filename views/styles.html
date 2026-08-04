@@ -90,7 +90,8 @@
    * so `aria-label` is its whole name and `:focus-visible` is the only thing
    * telling a keyboard reader which row they are about to remove.
    */
-  button.delete {
+  button.delete,
+  button.edit {
     display: inline-flex;
     padding: 0.3rem;
     border-color: transparent;
@@ -98,12 +99,14 @@
     color: var(--muted);
     line-height: 0;
   }
-  button.delete:hover {
+  button.delete:hover,
+  button.edit:hover {
     border-color: var(--border);
     background: color-mix(in srgb, currentColor 12%, transparent);
     color: inherit;
   }
-  button.delete:focus-visible {
+  button.delete:focus-visible,
+  button.edit:focus-visible {
     outline: 2px solid currentColor;
     outline-offset: 2px;
     color: inherit;
@@ -288,6 +291,26 @@
     color: var(--muted);
     font-size: 0.9rem;
     overflow-wrap: anywhere;
+  }
+  /* The row's controls sit closer to each other than to the entry they act on. */
+  .entry-actions {
+    display: flex;
+    gap: 0.15rem;
+  }
+  /*
+   * A row being edited is a form, not a flex row of its own: the fields lay
+   * themselves out with the same auto-fit grid the new-entry form uses, so the
+   * two read as the same control in two places.
+   */
+  li.entry-editing {
+    display: block;
+  }
+  form.entry-edit {
+    align-items: end;
+  }
+  .entry-edit-actions {
+    display: flex;
+    gap: 0.5rem;
   }
   li.empty {
     padding: 1.5rem 0.5rem;

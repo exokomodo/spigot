@@ -7,6 +7,7 @@ import {
   createEntryFromRequest,
   deleteEntryFromRequest,
   parseStripFlag,
+  updateEntryFromRequest,
 } from "../../lib/feeds/entry-service.js";
 import { toEntryJson } from "../../lib/feeds/presenter.js";
 import { ValidationError } from "../../lib/feeds/service.js";
@@ -37,7 +38,7 @@ function sendError(
  */
 export function sendEntryError(res: express.Response, error: unknown, context: string): void {
   if (error instanceof ValidationError) {
-    sendError(res, 400, "invalid_request", "The entry could not be created", error.issues);
+    sendError(res, 400, "invalid_request", "The entry could not be saved", error.issues);
     return;
   }
   if (error instanceof FeedNotFoundError) {
@@ -86,6 +87,30 @@ export function createEntryHandler(req: Request<Dependencies>, res: express.Resp
   })();
 }
 
+/**
+ * Applies the fields the body carries to one entry.
+ *
+ * PATCH rather than PUT because the body is read as the changes and not as the
+ * whole entry: a client that sends only a title leaves everything else standing,
+ * which is what PUT would forbid and what every caller here actually wants.
+ */
+export function updateEntryHandler(req: Request<Dependencies>, res: express.Response): void {
+  void (async () => {
+    const slug = pathParam(req.params.slug);
+    const entryId = pathParam(req.params.entryId);
+    if (slug === undefined || entryId === undefined) {
+      sendError(res, 404, "entry_not_found", "No entry was named in the request");
+      return;
+    }
+    try {
+      const entry = await updateEntryFromRequest(req.deps.db, slug, entryId, req.body);
+      res.status(200).json({ entry: toEntryJson(entry) });
+    } catch (error) {
+      sendEntryError(res, error, `Failed to update entry "${entryId}" in feed "${slug}"`);
+    }
+  })();
+}
+
 /** Deletes one entry from one feed, answering 204 with nothing left to describe. */
 export function deleteEntryHandler(req: Request<Dependencies>, res: express.Response): void {
   void (async () => {
@@ -108,6 +133,7 @@ const ApiEntriesController: Controller<Dependencies> = {
   basePath: "/api/feeds",
   routes: [
     { path: "/:slug/entries", method: "POST", handler: createEntryHandler },
+    { path: "/:slug/entries/:entryId", method: "PATCH", handler: updateEntryHandler },
     { path: "/:slug/entries/:entryId", method: "DELETE", handler: deleteEntryHandler },
   ],
 };

@@ -29,7 +29,7 @@ const boot = async (): Promise<Harness> => {
   databases.push(db);
   const dependencies: Dependencies = { db };
   const app = fromExpressApp(express(), dependencies);
-  // The entry form posts urlencoded, exactly as main.ts wires it.
+  // Both entry forms post urlencoded, exactly as main.ts wires it.
   app.use(express.urlencoded({ extended: false }));
   registerController(app, FeedsController);
   const server = await new Promise<http.Server>((resolve) => {
@@ -64,18 +64,23 @@ const call = (port: number, method: string, path: string): Promise<HttpResponse>
 
 const request = (port: number, path: string): Promise<HttpResponse> => call(port, "GET", path);
 
-/** Submits the entry form the way a browser does, so the flag arrives in the body. */
-const postForm = (port: number, path: string, form: string): Promise<HttpResponse> =>
+/** The plumbing both form helpers share: a request with a urlencoded body. */
+const submitRaw = (
+  port: number,
+  method: string,
+  path: string,
+  payload: string
+): Promise<HttpResponse> =>
   new Promise((resolve, reject) => {
     const req = http.request(
       {
         host: "127.0.0.1",
         port,
         path,
-        method: "POST",
+        method,
         headers: {
           "Content-Type": "application/x-www-form-urlencoded",
-          "Content-Length": Buffer.byteLength(form),
+          "Content-Length": Buffer.byteLength(payload),
         },
       },
       (res) => {
@@ -93,9 +98,25 @@ const postForm = (port: number, path: string, form: string): Promise<HttpRespons
       }
     );
     req.on("error", reject);
-    req.write(form);
-    req.end();
+    req.end(payload);
   });
+
+/**
+ * Submits the entry form the way a browser does, so the flag arrives in the body.
+ *
+ * Takes the body already encoded, because the strip tests care about the exact
+ * spelling of the flag they send.
+ */
+const postForm = (port: number, path: string, form: string): Promise<HttpResponse> =>
+  submitRaw(port, "POST", path, form);
+
+/** A form submission by field, in the encoding htmx sends one in. */
+const submit = (
+  port: number,
+  method: string,
+  path: string,
+  fields: Record<string, string>
+): Promise<HttpResponse> => submitRaw(port, method, path, new URLSearchParams(fields).toString());
 
 afterEach(async () => {
   await Promise.all(
@@ -447,5 +468,268 @@ describe("DELETE /feeds/:slug/entries/:entryId", () => {
     expect(body).toContain('hx-target="#entry-list"');
     expect(body).toContain("hx-confirm=");
     expect(body).toContain("aria-label=");
+  });
+});
+
+describe("GET /feeds/:slug/entries/:entryId/edit", () => {
+  it("returns the edit form for that row, filled in", async () => {
+    const { port, db } = await boot();
+    await seed(db, "tech");
+    const entryId = await seededEntryId(db);
+
+    const response = await request(port, `/feeds/tech/entries/${String(entryId)}/edit`);
+
+    expect(response.status).toBe(200);
+    expect(response.contentType).toContain("text/html");
+    expect(response.body).toContain(`hx-patch="/feeds/tech/entries/${String(entryId)}"`);
+    expect(response.body).toContain('value="https://example.test/1"');
+    expect(response.body).toContain('value="Shipping &amp; Scaling"');
+    // The row, not the page: this is swapped into the <li> it came from.
+    expect(response.body).not.toContain("<!doctype html>");
+  });
+
+  it("renders the pencil control on the feed page", async () => {
+    const { port, db } = await boot();
+    await seed(db, "tech");
+    const entryId = await seededEntryId(db);
+
+    const body = (await request(port, "/feeds/tech")).body;
+
+    expect(body).toContain(`hx-get="/feeds/tech/entries/${String(entryId)}/edit"`);
+    expect(body).toContain('hx-target="closest li"');
+    expect(body).toContain("aria-label=");
+  });
+
+  it("answers 404 for an entry that does not exist", async () => {
+    const { port, db } = await boot();
+    await seed(db, "tech");
+    const response = await request(port, "/feeds/tech/entries/999/edit");
+    expect(response.status).toBe(404);
+    expect(response.headers["hx-retarget"]).toBe("#errors");
+    expect(response.body).toContain("no longer exists");
+  });
+
+  it("answers 404 for a feed that does not exist", async () => {
+    const { port } = await boot();
+    expect((await request(port, "/feeds/nope/entries/1/edit")).status).toBe(404);
+  });
+
+  it("will not open another feed's entry for editing", async () => {
+    const { port, db } = await boot();
+    await seed(db, "tech");
+    await db.instance.run("INSERT INTO feeds (slug, title) VALUES (?, ?)", ["other", "Other"]);
+    const entryId = await seededEntryId(db);
+
+    const response = await request(port, `/feeds/other/entries/${String(entryId)}/edit`);
+
+    expect(response.status).toBe(404);
+    expect(response.body).not.toContain("Shipping");
+  });
+});
+
+describe("GET /feeds/:slug/entries/:entryId", () => {
+  it("returns the row on its own, which is how Cancel restores it", async () => {
+    const { port, db } = await boot();
+    await seed(db, "tech");
+    const entryId = await seededEntryId(db);
+
+    const response = await request(port, `/feeds/tech/entries/${String(entryId)}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body).toContain("Shipping &amp; Scaling");
+    expect(response.body).toContain(`hx-delete="/feeds/tech/entries/${String(entryId)}"`);
+    expect(response.body).not.toContain("hx-patch");
+    expect(response.body).not.toContain("<!doctype html>");
+  });
+
+  it("changes nothing", async () => {
+    const { port, db } = await boot();
+    await seed(db, "tech");
+    const entryId = await seededEntryId(db);
+
+    await request(port, `/feeds/tech/entries/${String(entryId)}`);
+
+    expect(await db.instance.get("SELECT title FROM entries")).toMatchObject({
+      title: "Shipping & Scaling",
+    });
+  });
+
+  it("answers 404 for an entry that is gone", async () => {
+    const { port, db } = await boot();
+    await seed(db, "tech");
+    expect((await request(port, "/feeds/tech/entries/999")).status).toBe(404);
+  });
+});
+
+describe("PATCH /feeds/:slug/entries/:entryId", () => {
+  it("returns the refreshed row and stores the change", async () => {
+    const { port, db } = await boot();
+    await seed(db, "tech");
+    const entryId = await seededEntryId(db);
+
+    const response = await submit(port, "PATCH", `/feeds/tech/entries/${String(entryId)}`, {
+      url: "https://example.test/moved",
+      title: "Renamed",
+      publishedAt: "",
+      description: "New notes",
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.contentType).toContain("text/html");
+    expect(response.body).toContain("Renamed");
+    expect(response.body).toContain('href="https://example.test/moved"');
+    expect(await db.instance.get("SELECT title, url FROM entries")).toMatchObject({
+      title: "Renamed",
+      url: "https://example.test/moved",
+    });
+  });
+
+  /* One row in, one row out: the rest of the list is not being edited. */
+  it("returns only the edited row, not the whole list", async () => {
+    const { port, db } = await boot();
+    await seed(db, "tech");
+    const feed = await db.instance.get<{ id: number }>("SELECT id FROM feeds");
+    await db.instance.run("INSERT INTO entries (feed_id, guid, url, title) VALUES (?, ?, ?, ?)", [
+      feed?.id,
+      "entry-2",
+      "https://example.test/2",
+      "Another post",
+    ]);
+    const entryId = await seededEntryId(db);
+
+    const response = await submit(port, "PATCH", `/feeds/tech/entries/${String(entryId)}`, {
+      url: "https://example.test/1",
+      title: "Renamed",
+    });
+
+    expect(response.body).toContain("Renamed");
+    expect(response.body).not.toContain("Another post");
+  });
+
+  it("carries the guid along when the url of a permalink entry moves", async () => {
+    const { port, db } = await boot();
+    const feed = await db.instance.run("INSERT INTO feeds (slug, title) VALUES (?, ?)", [
+      "tech",
+      "Tech",
+    ]);
+    await db.instance.run(
+      "INSERT INTO entries (feed_id, guid, guid_is_permalink, url, title) VALUES (?, ?, ?, ?, ?)",
+      [feed.lastID, "https://example.test/1", 1, "https://example.test/1", "A post"]
+    );
+    const entryId = await seededEntryId(db);
+
+    await submit(port, "PATCH", `/feeds/tech/entries/${String(entryId)}`, {
+      url: "https://example.test/moved",
+      title: "A post",
+    });
+
+    expect(await db.instance.get("SELECT guid FROM entries")).toMatchObject({
+      guid: "https://example.test/moved",
+    });
+  });
+
+  it("clears the error box out of band after a success", async () => {
+    const { port, db } = await boot();
+    await seed(db, "tech");
+    const entryId = await seededEntryId(db);
+
+    const response = await submit(port, "PATCH", `/feeds/tech/entries/${String(entryId)}`, {
+      url: "https://example.test/1",
+      title: "Renamed",
+    });
+
+    expect(response.body).toContain('hx-swap-oob="outerHTML"');
+  });
+
+  it("answers 400 and retargets at the error box for a rejected url", async () => {
+    const { port, db } = await boot();
+    await seed(db, "tech");
+    const entryId = await seededEntryId(db);
+
+    const response = await submit(port, "PATCH", `/feeds/tech/entries/${String(entryId)}`, {
+      url: "javascript:alert(1)",
+      title: "Renamed",
+    });
+
+    expect(response.status).toBe(400);
+    expect(response.headers["hx-retarget"]).toBe("#errors");
+    expect(response.headers["hx-reswap"]).toBe("innerHTML");
+    expect(await db.instance.get("SELECT title FROM entries")).toMatchObject({
+      title: "Shipping & Scaling",
+    });
+  });
+
+  it("answers 409 when a renamed permalink collides with a sibling", async () => {
+    const { port, db } = await boot();
+    const feed = await db.instance.run("INSERT INTO feeds (slug, title) VALUES (?, ?)", [
+      "tech",
+      "Tech",
+    ]);
+    for (const n of [1, 2]) {
+      await db.instance.run(
+        "INSERT INTO entries (feed_id, guid, guid_is_permalink, url, title) VALUES (?, ?, ?, ?, ?)",
+        [
+          feed.lastID,
+          `https://example.test/${String(n)}`,
+          1,
+          `https://example.test/${String(n)}`,
+          `Post ${String(n)}`,
+        ]
+      );
+    }
+    const entryId = await seededEntryId(db);
+
+    const response = await submit(port, "PATCH", `/feeds/tech/entries/${String(entryId)}`, {
+      url: "https://example.test/2",
+      title: "Post 1",
+    });
+
+    expect(response.status).toBe(409);
+    expect(response.headers["hx-retarget"]).toBe("#errors");
+    expect(response.body).toContain("already used in this feed");
+  });
+
+  it("answers 404 for an entry that is gone", async () => {
+    const { port, db } = await boot();
+    await seed(db, "tech");
+    const response = await submit(port, "PATCH", "/feeds/tech/entries/999", {
+      url: "https://example.test/1",
+      title: "Renamed",
+    });
+    expect(response.status).toBe(404);
+    expect(response.body).toContain("no longer exists");
+  });
+
+  it("answers 404 for a feed that does not exist", async () => {
+    const { port } = await boot();
+    const response = await submit(port, "PATCH", "/feeds/nope/entries/1", { title: "Renamed" });
+    expect(response.status).toBe(404);
+    expect(response.body).toContain("does not exist");
+  });
+
+  /* Ids are unique table-wide, so the feed in the path has to constrain them. */
+  it("will not edit an entry through another feed's URL", async () => {
+    const { port, db } = await boot();
+    await seed(db, "tech");
+    await db.instance.run("INSERT INTO feeds (slug, title) VALUES (?, ?)", ["other", "Other"]);
+    const entryId = await seededEntryId(db);
+
+    const response = await submit(port, "PATCH", `/feeds/other/entries/${String(entryId)}`, {
+      title: "Renamed",
+    });
+
+    expect(response.status).toBe(404);
+    expect(await db.instance.get("SELECT title FROM entries")).toMatchObject({
+      title: "Shipping & Scaling",
+    });
+  });
+
+  it("answers 404 for an id that is not a number, rather than 500", async () => {
+    const { port, db } = await boot();
+    await seed(db, "tech");
+    const response = await submit(port, "PATCH", "/feeds/tech/entries/banana", {
+      title: "Renamed",
+    });
+    expect(response.status).toBe(404);
   });
 });

@@ -45,7 +45,7 @@ interface Result {
   readonly json: Record<string, unknown>;
 }
 
-function post(port: number, path: string, body: unknown): Promise<Result> {
+function sendJson(port: number, method: string, path: string, body: unknown): Promise<Result> {
   return new Promise((resolve, reject) => {
     const payload = JSON.stringify(body);
     const req = http.request(
@@ -53,7 +53,7 @@ function post(port: number, path: string, body: unknown): Promise<Result> {
         host: "127.0.0.1",
         port,
         path,
-        method: "POST",
+        method,
         headers: {
           "Content-Type": "application/json",
           "Content-Length": Buffer.byteLength(payload),
@@ -75,6 +75,14 @@ function post(port: number, path: string, body: unknown): Promise<Result> {
     req.on("error", reject);
     req.end(payload);
   });
+}
+
+function post(port: number, path: string, body: unknown): Promise<Result> {
+  return sendJson(port, "POST", path, body);
+}
+
+function patch(port: number, path: string, body: unknown): Promise<Result> {
+  return sendJson(port, "PATCH", path, body);
 }
 
 function del(port: number, path: string): Promise<Result> {
@@ -260,14 +268,143 @@ describe("POST /api/feeds/:slug/entries", () => {
   });
 });
 
-describe("DELETE /api/feeds/:slug/entries/:entryId", () => {
-  /** Creates a feed with one entry and hands back the id the route addresses. */
-  async function seedEntry(port: number, db: Database, slug: string): Promise<number> {
-    await createFeed(db, { slug, title: slug });
-    const res = await post(port, `/api/feeds/${slug}/entries`, valid);
-    return (res.json.entry as { id: number }).id;
-  }
+/** Creates a feed with one entry and hands back the id the routes address. */
+async function seedEntry(
+  port: number,
+  db: Database,
+  slug: string,
+  body: Record<string, unknown> = valid
+): Promise<number> {
+  await createFeed(db, { slug, title: slug });
+  const res = await post(port, `/api/feeds/${slug}/entries`, body);
+  return (res.json.entry as { id: number }).id;
+}
 
+describe("PATCH /api/feeds/:slug/entries/:entryId", () => {
+  it("applies the change and answers 200 with the stored entry", async () => {
+    const { port, db } = await boot();
+    const id = await seedEntry(port, db, "tech");
+
+    const res = await patch(port, `/api/feeds/tech/entries/${String(id)}`, { title: "Renamed" });
+
+    expect(res.status).toBe(200);
+    expect(res.json.entry).toMatchObject({ id, title: "Renamed", url: "https://example.test/a" });
+  });
+
+  /*
+   * PATCH rather than PUT: the body is the change and not the whole entry, so a
+   * caller that knows about one field cannot blank the ones it has not heard of.
+   */
+  it("leaves the fields the body omits alone", async () => {
+    const { port, db } = await boot();
+    const id = await seedEntry(port, db, "tech", {
+      ...valid,
+      author: "Ada",
+      categories: "rust",
+      description: "Notes",
+    });
+
+    const res = await patch(port, `/api/feeds/tech/entries/${String(id)}`, { title: "Renamed" });
+
+    expect(res.json.entry).toMatchObject({
+      title: "Renamed",
+      author: "Ada",
+      categories: "rust",
+      description: "Notes",
+    });
+  });
+
+  it("carries a permalink guid along with the url it names", async () => {
+    const { port, db } = await boot();
+    const id = await seedEntry(port, db, "tech");
+
+    const res = await patch(port, `/api/feeds/tech/entries/${String(id)}`, {
+      url: "https://example.test/moved",
+    });
+
+    expect(res.json.entry).toMatchObject({
+      url: "https://example.test/moved",
+      guid: "https://example.test/moved",
+      guidIsPermalink: true,
+    });
+  });
+
+  it("leaves an entry's own guid where it is", async () => {
+    const { port, db } = await boot();
+    const id = await seedEntry(port, db, "tech", { ...valid, guid: "ep-42" });
+
+    const res = await patch(port, `/api/feeds/tech/entries/${String(id)}`, {
+      url: "https://example.test/moved",
+    });
+
+    expect(res.json.entry).toMatchObject({ guid: "ep-42", guidIsPermalink: false });
+  });
+
+  it("400s a javascript: URL rather than storing it", async () => {
+    const { port, db } = await boot();
+    const id = await seedEntry(port, db, "tech");
+
+    const res = await patch(port, `/api/feeds/tech/entries/${String(id)}`, {
+      url: "javascript:alert(1)",
+    });
+
+    expect(res.status).toBe(400);
+    const error = res.json.error as { details: { field: string }[] };
+    expect(error.details.map((d) => d.field)).toEqual(["url"]);
+    expect(await db.instance.get("SELECT url FROM entries")).toMatchObject({
+      url: "https://example.test/a",
+    });
+  });
+
+  it("409s when a renamed permalink collides with a sibling", async () => {
+    const { port, db } = await boot();
+    const id = await seedEntry(port, db, "tech");
+    await post(port, "/api/feeds/tech/entries", { ...valid, url: "https://example.test/b" });
+
+    const res = await patch(port, `/api/feeds/tech/entries/${String(id)}`, {
+      url: "https://example.test/b",
+    });
+
+    expect(res.status).toBe(409);
+    expect(res.json.error).toMatchObject({ code: "guid_taken" });
+  });
+
+  it("404s for a feed that does not exist", async () => {
+    const { port } = await boot();
+    const res = await patch(port, "/api/feeds/nope/entries/1", { title: "Renamed" });
+    expect(res.status).toBe(404);
+    expect(res.json.error).toMatchObject({ code: "feed_not_found" });
+  });
+
+  it("404s for an entry that does not exist", async () => {
+    const { port, db } = await boot();
+    await createFeed(db, { slug: "tech", title: "Tech" });
+    const res = await patch(port, "/api/feeds/tech/entries/999", { title: "Renamed" });
+    expect(res.status).toBe(404);
+    expect(res.json.error).toMatchObject({ code: "entry_not_found" });
+  });
+
+  it("404s an id that is not a number rather than 500ing on the query", async () => {
+    const { port, db } = await boot();
+    await createFeed(db, { slug: "tech", title: "Tech" });
+    const res = await patch(port, "/api/feeds/tech/entries/banana", { title: "Renamed" });
+    expect(res.status).toBe(404);
+  });
+
+  /* Ids are unique table-wide, so the feed in the path is what scopes them. */
+  it("will not edit an entry through another feed's path", async () => {
+    const { port, db } = await boot();
+    const id = await seedEntry(port, db, "two");
+    await createFeed(db, { slug: "one", title: "One" });
+
+    const res = await patch(port, `/api/feeds/one/entries/${String(id)}`, { title: "Renamed" });
+
+    expect(res.status).toBe(404);
+    expect(await db.instance.get("SELECT title FROM entries")).toMatchObject({ title: "A post" });
+  });
+});
+
+describe("DELETE /api/feeds/:slug/entries/:entryId", () => {
   it("deletes the entry and answers 204 with no body", async () => {
     const { port, db } = await boot();
     const id = await seedEntry(port, db, "tech");

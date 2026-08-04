@@ -1,0 +1,33 @@
+<button
+  type="button"
+  class="edit"
+  aria-label="{{label}}"
+  hx-get="{{path}}"
+  hx-target="closest li"
+  hx-swap="outerHTML"
+  hx-disabled-elt="this"
+>
+  <!--
+    The target is the row rather than the list: editing one entry is no reason
+    to re-render the other forty-nine, and a swap of the whole list would throw
+    away any other row already open for editing.
+
+    Inline SVG for the same reason the trash icon is, and `aria-hidden` because
+    the button is already named by its label.
+  -->
+  <svg
+    viewBox="0 0 24 24"
+    width="16"
+    height="16"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="1.8"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    aria-hidden="true"
+    focusable="false"
+  >
+    <path d="M4 20h4l10-10a2.83 2.83 0 0 0-4-4L4 16v4z" />
+    <path d="M13.5 6.5l4 4" />
+  </svg>
+</button>
