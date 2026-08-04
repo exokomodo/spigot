@@ -41,6 +41,21 @@
     font-size: 0.85rem;
     color: var(--muted);
   }
+  /*
+   * A checkbox names what it does to its right, rather than above it like the
+   * stacked field labels, and takes a whole row so the sentence has space.
+   */
+  label.checkbox {
+    display: flex;
+    grid-column: 1 / -1;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  label.checkbox input {
+    flex: none;
+    padding: 0;
+    border: 0;
+  }
   /* Spans the form grid so the hint reads as one line under every field. */
   .form-hint {
     grid-column: 1 / -1;

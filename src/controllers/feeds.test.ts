@@ -29,6 +29,8 @@ const boot = async (): Promise<Harness> => {
   databases.push(db);
   const dependencies: Dependencies = { db };
   const app = fromExpressApp(express(), dependencies);
+  // The entry form posts urlencoded, exactly as main.ts wires it.
+  app.use(express.urlencoded({ extended: false }));
   registerController(app, FeedsController);
   const server = await new Promise<http.Server>((resolve) => {
     const listening = app.listen(0, "127.0.0.1", () => resolve(listening));
@@ -61,6 +63,39 @@ const call = (port: number, method: string, path: string): Promise<HttpResponse>
   });
 
 const request = (port: number, path: string): Promise<HttpResponse> => call(port, "GET", path);
+
+/** Submits the entry form the way a browser does, so the flag arrives in the body. */
+const postForm = (port: number, path: string, form: string): Promise<HttpResponse> =>
+  new Promise((resolve, reject) => {
+    const req = http.request(
+      {
+        host: "127.0.0.1",
+        port,
+        path,
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+          "Content-Length": Buffer.byteLength(form),
+        },
+      },
+      (res) => {
+        const chunks: string[] = [];
+        res.setEncoding("utf8");
+        res.on("data", (chunk: string) => chunks.push(chunk));
+        res.on("end", () =>
+          resolve({
+            status: res.statusCode ?? 0,
+            contentType: res.headers["content-type"],
+            headers: res.headers,
+            body: chunks.join(""),
+          })
+        );
+      }
+    );
+    req.on("error", reject);
+    req.write(form);
+    req.end();
+  });
 
 afterEach(async () => {
   await Promise.all(
@@ -221,6 +256,87 @@ describe("the feed page", () => {
     const response = await request(port, "/feeds/x");
     expect(response.body).not.toContain("<script>alert(1)</script>");
     expect(response.body).toContain("&lt;script&gt;");
+  });
+});
+
+describe("POST /feeds/:slug/entries", () => {
+  const TRACKED = "url=https%3A%2F%2Fexample.test%2Fnew%3Futm_source%3Dnews%23part-2&title=New";
+
+  const storedUrl = async (db: Database): Promise<string | undefined> =>
+    (await db.instance.get<{ url: string }>("SELECT url FROM entries ORDER BY id DESC LIMIT 1"))
+      ?.url;
+
+  it("strips the query when the checkbox was left checked", async () => {
+    const { port, db } = await boot();
+    await seed(db, "tech");
+
+    const response = await postForm(port, "/feeds/tech/entries", `${TRACKED}&strip=true`);
+
+    expect(response.status).toBe(201);
+    expect(await storedUrl(db)).toBe("https://example.test/new#part-2");
+  });
+
+  /*
+   * The whole reason the form and the API can share one absent-means-off rule:
+   * an unchecked box posts nothing, so unchecking it is indistinguishable from
+   * an API caller that never sent the flag.
+   */
+  it("keeps the url as pasted when the checkbox was unchecked and so posted nothing", async () => {
+    const { port, db } = await boot();
+    await seed(db, "tech");
+
+    const response = await postForm(port, "/feeds/tech/entries", TRACKED);
+
+    expect(response.status).toBe(201);
+    expect(await storedUrl(db)).toBe("https://example.test/new?utm_source=news#part-2");
+  });
+
+  it("retargets a nonsense flag at the error box as a 400", async () => {
+    const { port, db } = await boot();
+    await seed(db, "tech");
+
+    const response = await postForm(port, "/feeds/tech/entries", `${TRACKED}&strip=perhaps`);
+
+    expect(response.status).toBe(400);
+    expect(response.headers["hx-retarget"]).toBe("#errors");
+    expect(response.body).toContain("strip");
+    expect(await db.instance.get("SELECT count(*) AS n FROM entries")).toMatchObject({ n: 1 });
+  });
+
+  it("returns the refreshed entry list on success", async () => {
+    const { port, db } = await boot();
+    await seed(db, "tech");
+
+    const response = await postForm(port, "/feeds/tech/entries", `${TRACKED}&strip=true`);
+
+    expect(response.body).toContain("New");
+    expect(response.body).not.toContain("<!doctype html>");
+  });
+});
+
+describe("the new entry form", () => {
+  /*
+   * Checked by default: the ordinary path drops the tracking, and a person who
+   * wants the URL exactly as pasted opts out rather than opting in.
+   */
+  it("offers the strip checkbox already checked", async () => {
+    const { port, db } = await boot();
+    await seed(db, "tech");
+
+    const body = (await request(port, "/feeds/tech")).body;
+
+    expect(body).toMatch(/<input name="strip" type="checkbox" value="true" checked/);
+  });
+
+  /* The effect has to be legible before submitting, not after. */
+  it("says what the checkbox will do to the URL", async () => {
+    const { port, db } = await boot();
+    await seed(db, "tech");
+
+    const body = (await request(port, "/feeds/tech")).body;
+
+    expect(body).toContain("Remove the query string");
+    expect(body).toContain("utm_source");
   });
 });
 
