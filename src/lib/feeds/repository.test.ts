@@ -206,6 +206,15 @@ describe("findFeedWithEntries", () => {
     const db = await openMigrated();
     expect(await findFeedWithEntries(db, "nope")).toBeUndefined();
   });
+
+  it("loads every entry, with no cap", async () => {
+    const db = await openMigrated();
+    const feedId = await insertFeed(db, "tech");
+    for (let index = 0; index < DEFAULT_ENTRY_LIMIT + 5; index += 1) {
+      await insertEntry(db, feedId, `entry-${index}`, "2026-01-01T00:00:00.000Z");
+    }
+    expect((await findFeedWithEntries(db, "tech"))?.entries).toHaveLength(DEFAULT_ENTRY_LIMIT + 5);
+  });
 });
 
 describe("countEntriesByFeedId", () => {

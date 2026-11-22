@@ -398,11 +398,15 @@ describe("paging the feed page", () => {
     );
   });
 
-  it("serves the RSS with only the newest entries, as readers expect", async () => {
+  it("serves every entry in the RSS, not just one page's worth", async () => {
     const { port, db } = await boot();
-    await seedMany(db, DEFAULT_ENTRY_LIMIT + 5);
+    await seedMany(db, DEFAULT_ENTRY_LIMIT * 2 + 20);
     const response = await request(port, "/feeds/tech.xml");
-    expect(response.body.match(/<item>/g)).toHaveLength(DEFAULT_ENTRY_LIMIT);
+    expect(response.body.match(/<item>/g)).toHaveLength(DEFAULT_ENTRY_LIMIT * 2 + 20);
+    // Newest first, oldest last, the same order as the page.
+    expect(response.body.indexOf("<title>Entry 120</title>")).toBeLessThan(
+      response.body.indexOf("<title>Entry 1</title>")
+    );
   });
 });
 

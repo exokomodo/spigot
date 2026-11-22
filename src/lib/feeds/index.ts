@@ -20,6 +20,7 @@ export {
   createFeed,
   deleteEntryById,
   deleteFeedBySlug,
+  findAllEntriesByFeedId,
   findEntriesByFeedId,
   findFeedBySlug,
   findFeedPage,

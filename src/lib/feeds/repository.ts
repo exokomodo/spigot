@@ -110,7 +110,7 @@ export interface EntryUpdate {
   readonly publishedAt?: string | null;
 }
 
-/** How many entries a feed serves when the caller does not say otherwise. */
+/** How many entries one page of a feed shows when the caller does not say otherwise. */
 export const DEFAULT_ENTRY_LIMIT = 50;
 
 export async function findFeedBySlug(db: Database, slug: string): Promise<FeedRow | undefined> {
@@ -414,11 +414,35 @@ export async function updateEntry(
   return findEntryById(db, feedId, entryId);
 }
 
-/** Loads a feed and its entries in one call, or `undefined` if the slug is unknown. */
+/**
+ * Every entry of a feed, newest first, with no cap.
+ *
+ * Same order and index as {@link findEntriesByFeedId}; only the LIMIT is gone.
+ */
+export async function findAllEntriesByFeedId(
+  db: Database,
+  feedId: number
+): Promise<readonly EntryRow[]> {
+  return db.instance.all<EntryRow[]>(
+    `SELECT * FROM entries
+      WHERE feed_id = ?
+      ORDER BY published_at DESC, id DESC`,
+    [feedId]
+  );
+}
+
+/**
+ * Loads a feed and every one of its entries, or `undefined` if the slug is
+ * unknown.
+ *
+ * Uncapped on purpose: this is what the RSS is built from, and a reader only
+ * ever learns about the entries the feed hands it. A cap would leave a new
+ * subscriber unable to see anything older than it. The browsable page pages
+ * through entries with {@link findFeedPage} instead.
+ */
 export async function findFeedWithEntries(
   db: Database,
-  slug: string,
-  limit: number = DEFAULT_ENTRY_LIMIT
+  slug: string
 ): Promise<FeedWithEntries | undefined> {
   const feed = await findFeedBySlug(db, slug);
   if (feed === undefined) {
@@ -426,7 +450,7 @@ export async function findFeedWithEntries(
   }
   return {
     feed,
-    entries: await findEntriesByFeedId(db, feed.id, limit),
+    entries: await findAllEntriesByFeedId(db, feed.id),
   };
 }
 
