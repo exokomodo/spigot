@@ -1,6 +1,7 @@
 import { SafeHtml, joinHtml, render, safe } from "../html/template.js";
 import { isSafeHttpUrl } from "../html/url.js";
 import { feedPagePath, feedPath } from "./presenter.js";
+import { ENTRY_TITLE_MAX_LENGTH } from "./entry-service.js";
 import { EntryRow, FeedRow, FeedSummaryRow } from "./repository.js";
 import { ValidationIssue } from "./service.js";
 
@@ -222,9 +223,18 @@ export function renderEntryEditForm(slug: string, row: EntryRow): SafeHtml {
   );
 }
 
-/** The entry list, or an empty state that says how to add the first one. */
-export function renderEntryRows(slug: string, rows: readonly EntryRow[]): SafeHtml {
+/**
+ * The entry list, or an empty state.
+ *
+ * With a search, an empty list means nothing matched rather than that the feed
+ * is empty, so it says that and links back to everything instead of explaining
+ * how to add a first entry.
+ */
+export function renderEntryRows(slug: string, rows: readonly EntryRow[], query = ""): SafeHtml {
   if (rows.length === 0) {
+    if (query.length > 0) {
+      return safe(render("entries-no-match", { query, allPath: feedPagePath(slug) }));
+    }
     return safe(render("entries-empty", { slug }));
   }
   return joinHtml(rows.map((row) => renderEntryRow(slug, row)));
@@ -243,16 +253,30 @@ export interface EntryPaging {
   readonly page: number;
   readonly pageCount: number;
   readonly totalEntries: number;
+  /** The title search in effect, or `""` (the default) for none. */
+  readonly query?: string;
 }
 
 /* Fixed markup, so the arrows can be entities like the rest of the templates. */
 const NEWER_LABEL = safe("&larr; Newer");
 const OLDER_LABEL = safe("Older &rarr;");
 
-/** The address of one page of a feed; page 1 is the bare feed page. */
-export function feedPageUrl(slug: string, page: number): string {
-  const base = feedPagePath(slug);
-  return page <= 1 ? base : `${base}?page=${String(page)}`;
+/**
+ * The address of one page of a feed, keeping any search.
+ *
+ * Page 1 without a search is the bare feed page, so the plain address stays
+ * the canonical one.
+ */
+export function feedPageUrl(slug: string, page: number, query = ""): string {
+  const params = new URLSearchParams();
+  if (query.length > 0) {
+    params.set("q", query);
+  }
+  if (page > 1) {
+    params.set("page", String(page));
+  }
+  const search = params.toString();
+  return search.length === 0 ? feedPagePath(slug) : `${feedPagePath(slug)}?${search}`;
 }
 
 /**
@@ -278,7 +302,7 @@ export function renderEntryPager(slug: string, paging: EntryPaging, outOfBand = 
     return safe(render("entry-pager-empty", { oob }));
   }
   const link = (page: number, rel: string, text: SafeHtml): SafeHtml =>
-    safe(render("entry-pager-link", { href: feedPageUrl(slug, page), rel, text }));
+    safe(render("entry-pager-link", { href: feedPageUrl(slug, page, paging.query), rel, text }));
   const gap = (text: SafeHtml): SafeHtml => safe(render("entry-pager-gap", { text }));
   return safe(
     render("entry-pager", {
@@ -294,9 +318,34 @@ export function renderEntryPager(slug: string, paging: EntryPaging, outOfBand = 
   );
 }
 
-/** The feed's total entry count, which the fragments refresh after a change. */
-export function renderEntryCount(totalEntries: number, outOfBand = false): SafeHtml {
-  return safe(render("entry-count", { oob: oobAttribute(outOfBand), count: totalEntries }));
+/**
+ * The feed's entry count, which the fragments refresh after a change. With a
+ * search it counts the matches and says so.
+ */
+export function renderEntryCount(totalEntries: number, outOfBand = false, query = ""): SafeHtml {
+  const noun = totalEntries === 1 ? "entry" : "entries";
+  const label =
+    query.length > 0
+      ? `${String(totalEntries)} matching ${noun}`
+      : `${String(totalEntries)} ${noun}`;
+  return safe(render("entry-count", { oob: oobAttribute(outOfBand), label }));
+}
+
+/**
+ * The title search box. A plain GET form, so a search is an ordinary address
+ * that can be bookmarked, shared and paged through like any other.
+ */
+export function renderEntrySearch(slug: string, query = ""): SafeHtml {
+  const clear =
+    query.length > 0 ? safe(render("entry-search-clear", { href: feedPagePath(slug) })) : safe("");
+  return safe(
+    render("entry-search", {
+      action: feedPagePath(slug),
+      query,
+      maxLength: ENTRY_TITLE_MAX_LENGTH,
+      clear,
+    })
+  );
 }
 
 /**
@@ -317,9 +366,10 @@ export function renderFeedPage(
     feedUrl: feedPath(feed.slug),
     rssButton: renderCopyRssButton(feed.slug, feed.title),
     createPath: `${feedPagePath(feed.slug)}/entries`,
-    entryCount: renderEntryCount(paging.totalEntries),
+    entryCount: renderEntryCount(paging.totalEntries, false, paging.query),
     siteLink: renderSiteLink(feed),
-    entries: renderEntryRows(feed.slug, entries),
+    search: renderEntrySearch(feed.slug, paging.query),
+    entries: renderEntryRows(feed.slug, entries, paging.query),
     pager: renderEntryPager(feed.slug, paging),
     icons: icons(),
     styles: styles(),

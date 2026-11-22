@@ -6,6 +6,8 @@ import {
   countEntriesByFeedId,
   deleteFeedBySlug,
   findEntriesByFeedId,
+  findEntryIdsByTitle,
+  foldForSearch,
   findFeedBySlug,
   findFeedPage,
   findFeedWithEntries,
@@ -36,11 +38,12 @@ const insertEntry = (
   db: Database,
   feedId: number,
   guid: string,
-  publishedAt: string | null
+  publishedAt: string | null,
+  title = `Entry ${guid}`
 ): Promise<unknown> =>
   db.instance.run(
     "INSERT INTO entries (feed_id, guid, url, title, published_at) VALUES (?, ?, ?, ?, ?)",
-    [feedId, guid, `https://example.test/${guid}`, `Entry ${guid}`, publishedAt]
+    [feedId, guid, `https://example.test/${guid}`, title, publishedAt]
   );
 
 describe("findFeedBySlug", () => {
@@ -283,5 +286,125 @@ describe("findFeedPage", () => {
   it("returns undefined for an unknown slug", async () => {
     const db = await openMigrated();
     expect(await findFeedPage(db, "nope", 1)).toBeUndefined();
+  });
+});
+
+describe("foldForSearch", () => {
+  it("ignores case beyond ASCII", () => {
+    expect(foldForSearch("ÜBER Ærø")).toBe(foldForSearch("über ærø"));
+  });
+
+  it("treats a composed and a decomposed accent as the same letter", () => {
+    expect(foldForSearch("Cafe\u0301")).toBe(foldForSearch("Caf\u00e9"));
+  });
+});
+
+describe("findEntryIdsByTitle", () => {
+  const seedTitles = async (db: Database, titles: readonly string[]): Promise<number> => {
+    const feedId = await insertFeed(db, "tech");
+    for (const [index, title] of titles.entries()) {
+      await insertEntry(
+        db,
+        feedId,
+        `g-${String(index)}`,
+        `2026-01-0${String(index + 1)}T00:00:00.000Z`,
+        title
+      );
+    }
+    return feedId;
+  };
+
+  const titlesOf = async (db: Database, ids: readonly number[]): Promise<string[]> => {
+    const rows = await Promise.all(
+      ids.map((id) =>
+        db.instance.get<{ title: string }>("SELECT title FROM entries WHERE id = ?", [id])
+      )
+    );
+    return rows.map((row) => row?.title ?? "");
+  };
+
+  it("matches part of a title regardless of case, newest first", async () => {
+    const db = await openMigrated();
+    const feedId = await seedTitles(db, ["Rust in 2026", "Go notes", "Why RUST?", "trusty tools"]);
+    const ids = await findEntryIdsByTitle(db, feedId, "rust");
+    expect(await titlesOf(db, ids)).toEqual(["trusty tools", "Why RUST?", "Rust in 2026"]);
+  });
+
+  it("matches accented titles regardless of case", async () => {
+    const db = await openMigrated();
+    const feedId = await seedTitles(db, ["Über alles", "Crème brûlée", "Plain"]);
+    expect(await titlesOf(db, await findEntryIdsByTitle(db, feedId, "über"))).toEqual([
+      "Über alles",
+    ]);
+    expect(await titlesOf(db, await findEntryIdsByTitle(db, feedId, "CRÈME"))).toEqual([
+      "Crème brûlée",
+    ]);
+  });
+
+  it("treats SQL wildcards in the search as plain characters", async () => {
+    const db = await openMigrated();
+    const feedId = await seedTitles(db, ["100% done", "1000 things", "snake_case", "snakecase"]);
+    expect(await titlesOf(db, await findEntryIdsByTitle(db, feedId, "%"))).toEqual(["100% done"]);
+    expect(await titlesOf(db, await findEntryIdsByTitle(db, feedId, "_"))).toEqual(["snake_case"]);
+  });
+
+  it("only searches the given feed", async () => {
+    const db = await openMigrated();
+    const tech = await insertFeed(db, "tech");
+    const food = await insertFeed(db, "food");
+    await insertEntry(db, tech, "t", "2026-01-01T00:00:00.000Z", "Rust");
+    await insertEntry(db, food, "f", "2026-01-01T00:00:00.000Z", "Rust stains");
+    expect(await titlesOf(db, await findEntryIdsByTitle(db, tech, "rust"))).toEqual(["Rust"]);
+  });
+});
+
+describe("findFeedPage with a search", () => {
+  /** `count` entries titled "Rust 1".."Rust N", interleaved with as many "Go" ones. */
+  const seedMixed = async (db: Database, count: number): Promise<void> => {
+    const feedId = await insertFeed(db, "tech");
+    for (let index = 1; index <= count; index += 1) {
+      const minute = new Date(Date.UTC(2026, 0, 1, 0, index)).toISOString();
+      await insertEntry(db, feedId, `r-${String(index)}`, minute, `Rust ${String(index)}`);
+      await insertEntry(db, feedId, `g-${String(index)}`, minute, `Go ${String(index)}`);
+    }
+  };
+
+  it("pages through the matches only, and counts them", async () => {
+    const db = await openMigrated();
+    await seedMixed(db, 5);
+    const loaded = await findFeedPage(db, "tech", 2, 2, "RUST");
+    expect(loaded?.entries.map((entry) => entry.title)).toEqual(["Rust 3", "Rust 2"]);
+    expect(loaded).toMatchObject({ page: 2, pageCount: 3, totalEntries: 5, query: "RUST" });
+  });
+
+  it("clamps a page past the end of the matches", async () => {
+    const db = await openMigrated();
+    await seedMixed(db, 5);
+    const loaded = await findFeedPage(db, "tech", 9, 2, "rust");
+    expect(loaded?.page).toBe(3);
+    expect(loaded?.entries.map((entry) => entry.title)).toEqual(["Rust 1"]);
+  });
+
+  it("gives one empty page when nothing matches", async () => {
+    const db = await openMigrated();
+    await seedMixed(db, 3);
+    const loaded = await findFeedPage(db, "tech", 1, 2, "python");
+    expect(loaded).toMatchObject({ entries: [], page: 1, pageCount: 1, totalEntries: 0 });
+  });
+
+  it("treats a blank search as no search", async () => {
+    const db = await openMigrated();
+    await seedMixed(db, 3);
+    const loaded = await findFeedPage(db, "tech", 1, 50, "   ");
+    expect(loaded).toMatchObject({ totalEntries: 6, query: "" });
+  });
+
+  it("trims the search before matching", async () => {
+    const db = await openMigrated();
+    await seedMixed(db, 3);
+    expect(await findFeedPage(db, "tech", 1, 50, "  rust  ")).toMatchObject({
+      totalEntries: 3,
+      query: "rust",
+    });
   });
 });
