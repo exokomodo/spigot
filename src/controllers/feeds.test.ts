@@ -461,6 +461,13 @@ describe("searching the feed page", () => {
     expect(response.body).toContain('value="rust"');
   });
 
+  it("finds an ñ when the search has a plain n", async () => {
+    const { port, db } = await boot();
+    await seedTitles(db, ["Jalapeño poppers", "Plain"]);
+    const response = await request(port, "/feeds/tech?q=jalapeno");
+    expect(titles(response.body)).toEqual(["Jalapeño poppers"]);
+  });
+
   it("matches accented titles regardless of case", async () => {
     const { port, db } = await boot();
     await seedTitles(db, ["Über alles", "Plain"]);
