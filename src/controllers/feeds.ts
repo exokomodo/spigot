@@ -9,6 +9,7 @@ import {
   findEntryFromRequest,
   updateEntryFromRequest,
 } from "../lib/feeds/entry-service.js";
+import { ENTRY_TITLE_MAX_LENGTH } from "../lib/feeds/entry-service.js";
 import { findFeedPage, findFeedWithEntries, toRssFeed } from "../lib/feeds/index.js";
 import { ValidationError } from "../lib/feeds/service.js";
 import { render } from "../lib/html/template.js";
@@ -74,21 +75,44 @@ export function parsePage(value: unknown): number {
 }
 
 /**
- * The page the reader is looking at when an htmx request comes in.
+ * Reads a title search, trimmed and cut to the longest title an entry can
+ * have, since nothing longer could match. Anything that is not a single string
+ * (a missing or repeated parameter) is no search at all.
+ */
+export function parseQuery(value: unknown): string {
+  if (typeof value !== "string") {
+    return "";
+  }
+  return value.trim().slice(0, ENTRY_TITLE_MAX_LENGTH);
+}
+
+/** The page and search a reader is looking at. */
+interface EntryView {
+  readonly page: number;
+  readonly query: string;
+}
+
+/**
+ * The page and search the reader is looking at when an htmx request comes in.
  *
  * htmx sends the page's address in `HX-Current-URL`, so a create or delete on
- * page 3 can answer with page 3 rather than throwing the reader back to page 1.
- * A request without it (a script, a test) gets the first page.
+ * page 3 of a search can answer with page 3 of that search rather than
+ * throwing the reader back to the unfiltered first page. A request without it
+ * (a script, a test) gets the first page of everything.
  */
-function currentPage(req: Request<Dependencies>): number {
+function currentView(req: Request<Dependencies>): EntryView {
   const header = req.get("HX-Current-URL");
   if (header === undefined) {
-    return 1;
+    return { page: 1, query: "" };
   }
   try {
-    return parsePage(new URL(header, "http://localhost").searchParams.get("page") ?? undefined);
+    const params = new URL(header, "http://localhost").searchParams;
+    return {
+      page: parsePage(params.get("page") ?? undefined),
+      query: parseQuery(params.get("q") ?? undefined),
+    };
   } catch {
-    return 1;
+    return { page: 1, query: "" };
   }
 }
 
@@ -97,14 +121,15 @@ function currentPage(req: Request<Dependencies>): number {
  * count elsewhere on the page, which change whenever an entry comes or goes.
  */
 async function renderEntryListFragment(req: Request<Dependencies>, slug: string): Promise<string> {
-  const loaded = await findFeedPage(req.deps.db, slug, currentPage(req));
+  const { page, query } = currentView(req);
+  const loaded = await findFeedPage(req.deps.db, slug, page, undefined, query);
   if (loaded === undefined) {
     return renderEntryRows(slug, []).html;
   }
   return [
-    renderEntryRows(slug, loaded.entries).html,
+    renderEntryRows(slug, loaded.entries, loaded.query).html,
     renderEntryPager(slug, loaded, true).html,
-    renderEntryCount(loaded.totalEntries, true).html,
+    renderEntryCount(loaded.totalEntries, true, loaded.query).html,
   ].join("\n");
 }
 
@@ -116,7 +141,13 @@ export function feedPageHandler(req: Request<Dependencies>, res: express.Respons
       const loaded =
         slug === undefined
           ? undefined
-          : await findFeedPage(req.deps.db, slug, parsePage(req.query.page));
+          : await findFeedPage(
+              req.deps.db,
+              slug,
+              parsePage(req.query.page),
+              undefined,
+              parseQuery(req.query.q)
+            );
       if (loaded === undefined) {
         res
           .status(404)

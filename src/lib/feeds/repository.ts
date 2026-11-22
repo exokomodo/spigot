@@ -454,6 +454,56 @@ export async function findFeedWithEntries(
   };
 }
 
+/**
+ * Folds a title or a search for comparison: Unicode case-insensitive, and
+ * indifferent to whether an accent was stored as one code point or two.
+ *
+ * `toLowerCase` rather than `toLocaleLowerCase`, so the result does not change
+ * with the server's locale (a Turkish locale lowercases `I` differently).
+ */
+export function foldForSearch(text: string): string {
+  return text.normalize("NFC").toLowerCase();
+}
+
+/**
+ * Ids of a feed's entries whose title contains `query`, newest first.
+ *
+ * The match runs here rather than in SQL because SQLite's `LIKE` and `lower()`
+ * only fold ASCII, so `über` would miss "Über". Only `id` and `title` are read,
+ * which keeps the scan cheap; the page's full rows are loaded afterwards by id.
+ */
+export async function findEntryIdsByTitle(
+  db: Database,
+  feedId: number,
+  query: string
+): Promise<readonly number[]> {
+  const rows = await db.instance.all<{ id: number; title: string }[]>(
+    `SELECT id, title FROM entries
+      WHERE feed_id = ?
+      ORDER BY published_at DESC, id DESC`,
+    [feedId]
+  );
+  const needle = foldForSearch(query);
+  return rows.filter((row) => foldForSearch(row.title).includes(needle)).map((row) => row.id);
+}
+
+/** Full rows for the given ids of one feed, in the order the ids were given. */
+async function findEntriesByIds(
+  db: Database,
+  feedId: number,
+  ids: readonly number[]
+): Promise<readonly EntryRow[]> {
+  if (ids.length === 0) {
+    return [];
+  }
+  const rows = await db.instance.all<EntryRow[]>(
+    `SELECT * FROM entries WHERE feed_id = ? AND id IN (${ids.map(() => "?").join(", ")})`,
+    [feedId, ...ids]
+  );
+  const byId = new Map(rows.map((row) => [row.id, row]));
+  return ids.flatMap((id) => byId.get(id) ?? []);
+}
+
 /** One page of a feed's entries, plus what a pager needs to link the others. */
 export interface FeedPage extends FeedWithEntries {
   /** 1-based, and always within `1..pageCount`. */
@@ -461,8 +511,24 @@ export interface FeedPage extends FeedWithEntries {
   /** At least 1, so an empty feed still has a page to show. */
   readonly pageCount: number;
   readonly pageSize: number;
-  /** Every entry the feed holds, not just the ones on this page. */
+  /**
+   * Every entry the page draws from, not just the ones on this page: the whole
+   * feed, or every match when there is a search.
+   */
   readonly totalEntries: number;
+  /** The title search this page is filtered by, or `""` for none. */
+  readonly query: string;
+}
+
+/** The slice of a list that one page covers, once the page has been clamped. */
+function pageBounds(
+  total: number,
+  page: number,
+  pageSize: number
+): { readonly current: number; readonly pageCount: number; readonly offset: number } {
+  const pageCount = Math.max(1, Math.ceil(total / pageSize));
+  const current = Math.min(Math.max(1, Math.floor(page)), pageCount);
+  return { current, pageCount, offset: (current - 1) * pageSize };
 }
 
 /**
@@ -472,26 +538,46 @@ export interface FeedPage extends FeedWithEntries {
  * Deleting the last entry on the last page, or following an old link after a
  * cleanup, would otherwise strand the reader on a blank page with nothing to
  * say how they got there.
+ *
+ * A non-blank `query` narrows the entries to those whose title contains it,
+ * ignoring case, and the page count and total then describe the matches.
  */
 export async function findFeedPage(
   db: Database,
   slug: string,
   page: number,
-  pageSize: number = DEFAULT_ENTRY_LIMIT
+  pageSize: number = DEFAULT_ENTRY_LIMIT,
+  query = ""
 ): Promise<FeedPage | undefined> {
   const feed = await findFeedBySlug(db, slug);
   if (feed === undefined) {
     return undefined;
   }
-  const totalEntries = await countEntriesByFeedId(db, feed.id);
-  const pageCount = Math.max(1, Math.ceil(totalEntries / pageSize));
-  const current = Math.min(Math.max(1, Math.floor(page)), pageCount);
+  const search = query.trim();
+
+  if (search.length === 0) {
+    const totalEntries = await countEntriesByFeedId(db, feed.id);
+    const { current, pageCount, offset } = pageBounds(totalEntries, page, pageSize);
+    return {
+      feed,
+      entries: await findEntriesByFeedId(db, feed.id, pageSize, offset),
+      page: current,
+      pageCount,
+      pageSize,
+      totalEntries,
+      query: "",
+    };
+  }
+
+  const ids = await findEntryIdsByTitle(db, feed.id, search);
+  const { current, pageCount, offset } = pageBounds(ids.length, page, pageSize);
   return {
     feed,
-    entries: await findEntriesByFeedId(db, feed.id, pageSize, (current - 1) * pageSize),
+    entries: await findEntriesByIds(db, feed.id, ids.slice(offset, offset + pageSize)),
     page: current,
     pageCount,
     pageSize,
-    totalEntries,
+    totalEntries: ids.length,
+    query: search,
   };
 }

@@ -3,8 +3,11 @@ import { EntryRow, FeedRow, FeedSummaryRow } from "./repository.js";
 import {
   feedPageUrl,
   formatPublishedAt,
+  renderEntryCount,
   renderEntryEditForm,
   renderEntryPager,
+  renderEntryRows,
+  renderEntrySearch,
   renderEntryRow,
   renderFeedPage,
   renderFeedRow,
@@ -478,5 +481,52 @@ describe("renderEntryEditForm", () => {
     const html = renderEntryEditForm("tech", entry({ url: "javascript:alert(1)" })).html;
     expect(html).not.toContain('href="javascript:');
     expect(html).toContain('value="javascript:alert(1)"');
+  });
+});
+
+describe("searching a feed page", () => {
+  const searching = { page: 1, pageCount: 3, totalEntries: 120, query: "rust & go" };
+
+  it("keeps the search in the pager links", () => {
+    const html = renderEntryPager("tech", { ...searching, page: 2 }).html;
+    expect(html).toContain('href="/feeds/tech?q=rust+%26+go" rel="prev"');
+    expect(html).toContain('href="/feeds/tech?q=rust+%26+go&amp;page=3" rel="next"');
+  });
+
+  it("builds a page address with a search", () => {
+    expect(feedPageUrl("tech", 1, "rust")).toBe("/feeds/tech?q=rust");
+    expect(feedPageUrl("tech", 2, "rust")).toBe("/feeds/tech?q=rust&page=2");
+  });
+
+  it("counts matches rather than entries", () => {
+    expect(renderEntryCount(3, false, "rust").html).toContain(">3 matching entries<");
+    expect(renderEntryCount(1, false, "rust").html).toContain(">1 matching entry<");
+    expect(renderEntryCount(1).html).toContain(">1 entry<");
+  });
+
+  it("fills the search box with the current search, escaped", () => {
+    const html = renderEntrySearch("tech", '"><script>x</script>').html;
+    expect(html).toContain('value="&quot;&gt;&lt;script&gt;x&lt;/script&gt;"');
+    expect(html).not.toContain("<script>x");
+  });
+
+  it("offers a way to clear the search only while there is one", () => {
+    expect(renderEntrySearch("tech", "rust").html).toContain('href="/feeds/tech">Clear<');
+    expect(renderEntrySearch("tech").html).not.toContain("Clear");
+  });
+
+  it("says nothing matched, rather than that the feed is empty", () => {
+    const html = renderEntryRows("tech", [], "<b>rust</b>").html;
+    expect(html).toContain("No entry titles match");
+    expect(html).toContain("&lt;b&gt;rust&lt;/b&gt;");
+    expect(html).toContain('href="/feeds/tech"');
+    expect(html).not.toContain("No entries yet");
+  });
+
+  it("puts the search box on the page", () => {
+    const html = renderFeedPage(feed, [entry()], searching);
+    expect(html).toContain('action="/feeds/tech"');
+    expect(html).toContain('value="rust &amp; go"');
+    expect(html).toContain("120 matching entries");
   });
 });

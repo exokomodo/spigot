@@ -6,8 +6,8 @@ import Dependencies from "../lib/dependencies.js";
 import { fromExpressApp } from "../lib/rest/application.js";
 import { registerController } from "../lib/rest/controller.js";
 import { FEED_NOT_FOUND_MESSAGE, RSS_CONTENT_TYPE } from "../lib/rss/index.js";
-import { DEFAULT_ENTRY_LIMIT } from "../lib/feeds/index.js";
-import FeedsController, { parsePage } from "./feeds.js";
+import { DEFAULT_ENTRY_LIMIT, ENTRY_TITLE_MAX_LENGTH } from "../lib/feeds/index.js";
+import FeedsController, { parsePage, parseQuery } from "./feeds.js";
 
 interface Harness {
   readonly port: number;
@@ -426,6 +426,122 @@ describe("parsePage", () => {
   it("treats a missing or repeated parameter as the first page", () => {
     expect(parsePage(undefined)).toBe(1);
     expect(parsePage(["2", "3"])).toBe(1);
+  });
+});
+
+describe("searching the feed page", () => {
+  /** One feed holding the given titles, the first one newest. */
+  const seedTitles = async (db: Database, titles: readonly string[]): Promise<void> => {
+    const feed = await db.instance.run("INSERT INTO feeds (slug, title) VALUES (?, ?)", [
+      "tech",
+      "Tech",
+    ]);
+    for (const [index, title] of titles.entries()) {
+      const minute = new Date(Date.UTC(2026, 0, 1, 0, titles.length - index)).toISOString();
+      await db.instance.run(
+        "INSERT INTO entries (feed_id, guid, url, title, published_at) VALUES (?, ?, ?, ?, ?)",
+        [feed.lastID, `g-${String(index)}`, `https://example.test/${String(index)}`, title, minute]
+      );
+    }
+  };
+
+  /** Titles of the entries on a page, in the order they render. */
+  const titles = (html: string): string[] =>
+    [...html.matchAll(/<div class="entry-title"><a [^>]*>([^<]*)<\/a>/g)].map(
+      (match) => match[1] ?? ""
+    );
+
+  it("shows only entries whose title matches, ignoring case", async () => {
+    const { port, db } = await boot();
+    await seedTitles(db, ["Rust in 2026", "Go notes", "Why RUST?"]);
+    const response = await request(port, "/feeds/tech?q=rust");
+    expect(response.status).toBe(200);
+    expect(titles(response.body)).toEqual(["Rust in 2026", "Why RUST?"]);
+    expect(response.body).toContain("2 matching entries");
+    expect(response.body).toContain('value="rust"');
+  });
+
+  it("matches accented titles regardless of case", async () => {
+    const { port, db } = await boot();
+    await seedTitles(db, ["Über alles", "Plain"]);
+    const response = await request(port, `/feeds/tech?q=${encodeURIComponent("über")}`);
+    expect(titles(response.body)).toEqual(["Über alles"]);
+  });
+
+  it("pages through the matches and keeps the search in the links", async () => {
+    const { port, db } = await boot();
+    // Twice a page and then some, alternating, so the matches alone run to two pages.
+    await seedTitles(
+      db,
+      Array.from({ length: DEFAULT_ENTRY_LIMIT * 2 + 20 }, (_, index) =>
+        index % 2 === 0 ? `Rust ${String(index)}` : `Go ${String(index)}`
+      )
+    );
+
+    const first = await request(port, "/feeds/tech?q=rust");
+    expect(titles(first.body)).toHaveLength(DEFAULT_ENTRY_LIMIT);
+    expect(first.body).toContain("Page 1 of 2");
+    expect(first.body).toContain('href="/feeds/tech?q=rust&amp;page=2" rel="next"');
+
+    const second = await request(port, "/feeds/tech?q=rust&page=2");
+    expect(titles(second.body)).toHaveLength(10);
+    expect(second.body).toContain('href="/feeds/tech?q=rust" rel="prev"');
+    expect(titles(second.body).every((title) => title.startsWith("Rust"))).toBe(true);
+  });
+
+  it("says when nothing matches", async () => {
+    const { port, db } = await boot();
+    await seedTitles(db, ["Go notes"]);
+    const response = await request(port, "/feeds/tech?q=rust");
+    expect(response.body).toContain("No entry titles match");
+    expect(response.body).toContain("0 matching entries");
+    expect(response.body).not.toContain("No entries yet");
+  });
+
+  it("shows everything for an empty search", async () => {
+    const { port, db } = await boot();
+    await seedTitles(db, ["Rust", "Go"]);
+    const response = await request(port, "/feeds/tech?q=");
+    expect(titles(response.body)).toEqual(["Rust", "Go"]);
+    expect(response.body).toContain("2 entries");
+  });
+
+  it("does not filter the RSS", async () => {
+    const { port, db } = await boot();
+    await seedTitles(db, ["Rust", "Go"]);
+    const response = await request(port, "/feeds/tech.xml?q=rust");
+    expect(response.body.match(/<item>/g)).toHaveLength(2);
+  });
+
+  it("keeps the search when an entry is deleted", async () => {
+    const { port, db } = await boot();
+    await seedTitles(db, ["Rust one", "Go", "Rust two"]);
+    const row = await db.instance.get<{ id: number }>(
+      "SELECT id FROM entries WHERE title = 'Rust one'"
+    );
+    const response = await call(port, "DELETE", `/feeds/tech/entries/${String(row?.id)}`, {
+      "HX-Current-URL": `http://127.0.0.1:${String(port)}/feeds/tech?q=rust`,
+    });
+    expect(response.status).toBe(200);
+    expect(titles(response.body)).toEqual(["Rust two"]);
+    expect(response.body).toContain(
+      '<span id="entry-count" hx-swap-oob="outerHTML">1 matching entry</span>'
+    );
+  });
+});
+
+describe("parseQuery", () => {
+  it("trims a search", () => {
+    expect(parseQuery("  rust ")).toBe("rust");
+  });
+
+  it("treats a missing or repeated parameter as no search", () => {
+    expect(parseQuery(undefined)).toBe("");
+    expect(parseQuery(["a", "b"])).toBe("");
+  });
+
+  it("cuts a search to the longest title an entry can have", () => {
+    expect(parseQuery("x".repeat(10_000))).toHaveLength(ENTRY_TITLE_MAX_LENGTH);
   });
 });
 

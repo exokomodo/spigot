@@ -314,6 +314,20 @@
   li.empty p {
     margin: 0.25rem 0;
   }
+  /* One row rather than the entry form's grid: a box, its button, and Clear. */
+  form.search {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+    margin: 0 0 1rem;
+  }
+  form.search input {
+    flex: 1 1 14rem;
+  }
+  .search-clear {
+    color: var(--muted);
+  }
   .pager {
     display: flex;
     justify-content: space-between;
