@@ -6,7 +6,8 @@ import Dependencies from "../lib/dependencies.js";
 import { fromExpressApp } from "../lib/rest/application.js";
 import { registerController } from "../lib/rest/controller.js";
 import { FEED_NOT_FOUND_MESSAGE, RSS_CONTENT_TYPE } from "../lib/rss/index.js";
-import FeedsController from "./feeds.js";
+import { DEFAULT_ENTRY_LIMIT } from "../lib/feeds/index.js";
+import FeedsController, { parsePage } from "./feeds.js";
 
 interface Harness {
   readonly port: number;
@@ -43,9 +44,14 @@ const boot = async (): Promise<Harness> => {
   return { port: address.port, db };
 };
 
-const call = (port: number, method: string, path: string): Promise<HttpResponse> =>
+const call = (
+  port: number,
+  method: string,
+  path: string,
+  headers: http.OutgoingHttpHeaders = {}
+): Promise<HttpResponse> =>
   new Promise((resolve, reject) => {
-    const req = http.request({ host: "127.0.0.1", port, path, method }, (res) => {
+    const req = http.request({ host: "127.0.0.1", port, path, method, headers }, (res) => {
       const chunks: string[] = [];
       res.setEncoding("utf8");
       res.on("data", (chunk: string) => chunks.push(chunk));
@@ -280,6 +286,149 @@ describe("the feed page", () => {
   });
 });
 
+describe("paging the feed page", () => {
+  /**
+   * A feed with `count` entries titled "Entry 1" (oldest) to "Entry N"
+   * (newest), each a minute apart so the order is unambiguous.
+   */
+  const seedMany = async (db: Database, count: number): Promise<number> => {
+    const feed = await db.instance.run("INSERT INTO feeds (slug, title) VALUES (?, ?)", [
+      "tech",
+      "Tech",
+    ]);
+    for (let index = 1; index <= count; index += 1) {
+      const minute = new Date(Date.UTC(2026, 0, 1, 0, index)).toISOString();
+      await db.instance.run(
+        "INSERT INTO entries (feed_id, guid, url, title, published_at) VALUES (?, ?, ?, ?, ?)",
+        [
+          feed.lastID,
+          `g-${String(index)}`,
+          `https://example.test/${String(index)}`,
+          `Entry ${String(index)}`,
+          minute,
+        ]
+      );
+    }
+    return feed.lastID as number;
+  };
+
+  /** Titles of the entries on a page, in the order they render. */
+  const titles = (html: string): string[] =>
+    [...html.matchAll(/>(Entry \d+)</g)].map((match) => match[1] ?? "");
+
+  it("shows the newest page first and links the next", async () => {
+    const { port, db } = await boot();
+    await seedMany(db, DEFAULT_ENTRY_LIMIT * 2 + 20);
+    const response = await request(port, "/feeds/tech");
+    const shown = titles(response.body);
+    expect(shown).toHaveLength(DEFAULT_ENTRY_LIMIT);
+    expect(shown[0]).toBe(`Entry ${String(DEFAULT_ENTRY_LIMIT * 2 + 20)}`);
+    expect(response.body).toContain('href="/feeds/tech?page=2" rel="next"');
+    expect(response.body).toContain("Page 1 of 3");
+  });
+
+  it("counts every entry in the feed, not just the ones shown", async () => {
+    const { port, db } = await boot();
+    await seedMany(db, DEFAULT_ENTRY_LIMIT + 7);
+    const response = await request(port, "/feeds/tech");
+    expect(response.body).toContain(`${String(DEFAULT_ENTRY_LIMIT + 7)} entries`);
+  });
+
+  it("reaches the oldest entries on the last page", async () => {
+    const { port, db } = await boot();
+    await seedMany(db, DEFAULT_ENTRY_LIMIT * 2 + 20);
+    const response = await request(port, "/feeds/tech?page=3");
+    expect(titles(response.body)).toEqual(
+      Array.from({ length: 20 }, (_, index) => `Entry ${String(20 - index)}`)
+    );
+    expect(response.body).toContain('href="/feeds/tech?page=2" rel="prev"');
+    expect(response.body).not.toContain('rel="next"');
+  });
+
+  it.each([["abc"], ["-1"], ["0"], ["1.5"]])(
+    "treats a page of %s as the first page",
+    async (page) => {
+      const { port, db } = await boot();
+      await seedMany(db, DEFAULT_ENTRY_LIMIT + 1);
+      const response = await request(port, `/feeds/tech?page=${page}`);
+      expect(response.status).toBe(200);
+      expect(response.body).toContain("Page 1 of 2");
+    }
+  );
+
+  it("shows the last page for a page past the end", async () => {
+    const { port, db } = await boot();
+    await seedMany(db, DEFAULT_ENTRY_LIMIT + 1);
+    const response = await request(port, "/feeds/tech?page=9");
+    expect(response.body).toContain("Page 2 of 2");
+    expect(titles(response.body)).toEqual(["Entry 1"]);
+  });
+
+  it("keeps the reader on their page when they delete an entry there", async () => {
+    const { port, db } = await boot();
+    await seedMany(db, DEFAULT_ENTRY_LIMIT + 2);
+    const row = await db.instance.get<{ id: number }>(
+      "SELECT id FROM entries WHERE title = 'Entry 1'"
+    );
+    const response = await call(port, "DELETE", `/feeds/tech/entries/${String(row?.id)}`, {
+      "HX-Current-URL": `http://127.0.0.1:${String(port)}/feeds/tech?page=2`,
+    });
+    expect(response.status).toBe(200);
+    expect(titles(response.body)).toEqual(["Entry 2"]);
+    expect(response.body).toContain(
+      '<nav id="entry-pager" class="pager" aria-label="Entry pages" hx-swap-oob="outerHTML">'
+    );
+    expect(response.body).toContain(
+      `<span id="entry-count" hx-swap-oob="outerHTML">${String(DEFAULT_ENTRY_LIMIT + 1)} entries</span>`
+    );
+  });
+
+  it("drops the pager when a delete leaves one page", async () => {
+    const { port, db } = await boot();
+    await seedMany(db, DEFAULT_ENTRY_LIMIT + 1);
+    const row = await db.instance.get<{ id: number }>(
+      "SELECT id FROM entries WHERE title = 'Entry 1'"
+    );
+    const response = await call(port, "DELETE", `/feeds/tech/entries/${String(row?.id)}`, {
+      "HX-Current-URL": `http://127.0.0.1:${String(port)}/feeds/tech?page=2`,
+    });
+    expect(titles(response.body)).toHaveLength(DEFAULT_ENTRY_LIMIT);
+    expect(response.body).toContain(
+      '<nav id="entry-pager" class="pager" aria-label="Entry pages" hx-swap-oob="outerHTML"></nav>'
+    );
+  });
+
+  it("serves every entry in the RSS, not just one page's worth", async () => {
+    const { port, db } = await boot();
+    await seedMany(db, DEFAULT_ENTRY_LIMIT * 2 + 20);
+    const response = await request(port, "/feeds/tech.xml");
+    expect(response.body.match(/<item>/g)).toHaveLength(DEFAULT_ENTRY_LIMIT * 2 + 20);
+    // Newest first, oldest last, the same order as the page.
+    expect(response.body.indexOf("<title>Entry 120</title>")).toBeLessThan(
+      response.body.indexOf("<title>Entry 1</title>")
+    );
+  });
+});
+
+describe("parsePage", () => {
+  it.each([
+    ["3", 3],
+    ["1", 1],
+    ["0", 1],
+    ["-2", 1],
+    ["two", 1],
+    ["", 1],
+    ["9999999999", 1],
+  ])("reads %j as page %i", (value, expected) => {
+    expect(parsePage(value)).toBe(expected);
+  });
+
+  it("treats a missing or repeated parameter as the first page", () => {
+    expect(parsePage(undefined)).toBe(1);
+    expect(parsePage(["2", "3"])).toBe(1);
+  });
+});
+
 describe("POST /feeds/:slug/entries", () => {
   const TRACKED =
     "url=https%3A%2F%2Fexample.test%2Fnew%3Futm_source%3Dnews%26page%3D2%23part-2&title=New";
@@ -389,7 +538,7 @@ describe("DELETE /feeds/:slug/entries/:entryId", () => {
 
     const response = await call(port, "DELETE", `/feeds/tech/entries/${String(entryId)}`);
 
-    expect(response.body).toContain('hx-swap-oob="outerHTML"');
+    expect(response.body).toContain('<div id="errors" role="alert" hx-swap-oob="outerHTML">');
   });
 
   it("really removes the entry, and leaves the feed standing", async () => {

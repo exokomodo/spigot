@@ -4,6 +4,7 @@ export type { EntryJson, FeedJson } from "./presenter.js";
 export { feedPagePath, feedPath, toEntryJson, toFeedJson, toFeedSummaryJson } from "./presenter.js";
 export type {
   EntryRow,
+  FeedPage,
   FeedRow,
   FeedSummaryRow,
   FeedWithEntries,
@@ -15,11 +16,14 @@ export {
   DuplicateGuidError,
   DuplicateSlugError,
   createEntry,
+  countEntriesByFeedId,
   createFeed,
   deleteEntryById,
   deleteFeedBySlug,
+  findAllEntriesByFeedId,
   findEntriesByFeedId,
   findFeedBySlug,
+  findFeedPage,
   findFeedWithEntries,
   listFeedSummaries,
 } from "./repository.js";
@@ -47,7 +51,9 @@ export {
   parseEntryId,
   parseNewEntry,
 } from "./entry-service.js";
+export type { EntryPaging } from "./views.js";
 export {
+  feedPageUrl,
   formatPublishedAt,
   renderEntryRow,
   renderEntryRows,
@@ -56,6 +62,8 @@ export {
   renderFeedRows,
   renderIndexPage,
   renderLink,
+  renderEntryCount,
+  renderEntryPager,
   renderNotFoundPage,
   renderValidationErrors,
 } from "./views.js";

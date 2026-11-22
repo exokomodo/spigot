@@ -110,7 +110,7 @@ export interface EntryUpdate {
   readonly publishedAt?: string | null;
 }
 
-/** How many entries a feed serves when the caller does not say otherwise. */
+/** How many entries one page of a feed shows when the caller does not say otherwise. */
 export const DEFAULT_ENTRY_LIMIT = 50;
 
 export async function findFeedBySlug(db: Database, slug: string): Promise<FeedRow | undefined> {
@@ -128,15 +128,25 @@ export async function findFeedBySlug(db: Database, slug: string): Promise<FeedRo
 export async function findEntriesByFeedId(
   db: Database,
   feedId: number,
-  limit: number = DEFAULT_ENTRY_LIMIT
+  limit: number = DEFAULT_ENTRY_LIMIT,
+  offset = 0
 ): Promise<readonly EntryRow[]> {
   return db.instance.all<EntryRow[]>(
     `SELECT * FROM entries
       WHERE feed_id = ?
       ORDER BY published_at DESC, id DESC
-      LIMIT ?`,
-    [feedId, limit]
+      LIMIT ? OFFSET ?`,
+    [feedId, limit, offset]
   );
+}
+
+/** How many entries a feed holds in all, regardless of any page size. */
+export async function countEntriesByFeedId(db: Database, feedId: number): Promise<number> {
+  const row = await db.instance.get<{ n: number }>(
+    "SELECT COUNT(*) AS n FROM entries WHERE feed_id = ?",
+    [feedId]
+  );
+  return row?.n ?? 0;
 }
 
 /**
@@ -404,11 +414,35 @@ export async function updateEntry(
   return findEntryById(db, feedId, entryId);
 }
 
-/** Loads a feed and its entries in one call, or `undefined` if the slug is unknown. */
+/**
+ * Every entry of a feed, newest first, with no cap.
+ *
+ * Same order and index as {@link findEntriesByFeedId}; only the LIMIT is gone.
+ */
+export async function findAllEntriesByFeedId(
+  db: Database,
+  feedId: number
+): Promise<readonly EntryRow[]> {
+  return db.instance.all<EntryRow[]>(
+    `SELECT * FROM entries
+      WHERE feed_id = ?
+      ORDER BY published_at DESC, id DESC`,
+    [feedId]
+  );
+}
+
+/**
+ * Loads a feed and every one of its entries, or `undefined` if the slug is
+ * unknown.
+ *
+ * Uncapped on purpose: this is what the RSS is built from, and a reader only
+ * ever learns about the entries the feed hands it. A cap would leave a new
+ * subscriber unable to see anything older than it. The browsable page pages
+ * through entries with {@link findFeedPage} instead.
+ */
 export async function findFeedWithEntries(
   db: Database,
-  slug: string,
-  limit: number = DEFAULT_ENTRY_LIMIT
+  slug: string
 ): Promise<FeedWithEntries | undefined> {
   const feed = await findFeedBySlug(db, slug);
   if (feed === undefined) {
@@ -416,6 +450,48 @@ export async function findFeedWithEntries(
   }
   return {
     feed,
-    entries: await findEntriesByFeedId(db, feed.id, limit),
+    entries: await findAllEntriesByFeedId(db, feed.id),
+  };
+}
+
+/** One page of a feed's entries, plus what a pager needs to link the others. */
+export interface FeedPage extends FeedWithEntries {
+  /** 1-based, and always within `1..pageCount`. */
+  readonly page: number;
+  /** At least 1, so an empty feed still has a page to show. */
+  readonly pageCount: number;
+  readonly pageSize: number;
+  /** Every entry the feed holds, not just the ones on this page. */
+  readonly totalEntries: number;
+}
+
+/**
+ * Loads one page of a feed, or `undefined` if the slug is unknown.
+ *
+ * A page past the end is clamped to the last one rather than answered empty.
+ * Deleting the last entry on the last page, or following an old link after a
+ * cleanup, would otherwise strand the reader on a blank page with nothing to
+ * say how they got there.
+ */
+export async function findFeedPage(
+  db: Database,
+  slug: string,
+  page: number,
+  pageSize: number = DEFAULT_ENTRY_LIMIT
+): Promise<FeedPage | undefined> {
+  const feed = await findFeedBySlug(db, slug);
+  if (feed === undefined) {
+    return undefined;
+  }
+  const totalEntries = await countEntriesByFeedId(db, feed.id);
+  const pageCount = Math.max(1, Math.ceil(totalEntries / pageSize));
+  const current = Math.min(Math.max(1, Math.floor(page)), pageCount);
+  return {
+    feed,
+    entries: await findEntriesByFeedId(db, feed.id, pageSize, (current - 1) * pageSize),
+    page: current,
+    pageCount,
+    pageSize,
+    totalEntries,
   };
 }

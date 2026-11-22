@@ -314,6 +314,21 @@
   li.empty p {
     margin: 0.25rem 0;
   }
+  .pager {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 1rem;
+    margin: 1rem 0 0;
+    color: var(--muted);
+  }
+  .pager:empty {
+    display: none;
+  }
+  /* Kept in the flow when absent, so the status stays centred on every page. */
+  .pager-gap {
+    visibility: hidden;
+  }
   /* A URL whose scheme is not http(s) is shown as text rather than linked. */
   .unsafe-link {
     text-decoration: underline dotted;
