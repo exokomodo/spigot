@@ -297,6 +297,27 @@ describe("foldForSearch", () => {
   it("treats a composed and a decomposed accent as the same letter", () => {
     expect(foldForSearch("Cafe\u0301")).toBe(foldForSearch("Caf\u00e9"));
   });
+
+  it.each([
+    ["jalapeño", "jalapeno"],
+    ["JALAPEÑO", "jalapeno"],
+    ["Crème brûlée", "creme brulee"],
+    ["Résumé", "resume"],
+    ["São Paulo", "sao paulo"],
+    ["Łódź", "lodz"],
+    ["Øresund", "oresund"],
+    ["Straße", "strasse"],
+    ["Æsir", "aesir"],
+  ])("folds %j to %j", (text, folded) => {
+    expect(foldForSearch(text)).toBe(folded);
+  });
+
+  it("keeps marks that change the letter in non-Latin scripts", () => {
+    // が (ga) and か (ka) are different syllables, not an accented pair.
+    expect(foldForSearch("が")).not.toBe(foldForSearch("か"));
+    // हि and ह differ by a vowel sign.
+    expect(foldForSearch("हि")).not.toBe(foldForSearch("ह"));
+  });
 });
 
 describe("findEntryIdsByTitle", () => {
@@ -328,6 +349,19 @@ describe("findEntryIdsByTitle", () => {
     const feedId = await seedTitles(db, ["Rust in 2026", "Go notes", "Why RUST?", "trusty tools"]);
     const ids = await findEntryIdsByTitle(db, feedId, "rust");
     expect(await titlesOf(db, ids)).toEqual(["trusty tools", "Why RUST?", "Rust in 2026"]);
+  });
+
+  it("ignores accents in either direction", async () => {
+    const db = await openMigrated();
+    const feedId = await seedTitles(db, ["Jalapeño poppers", "Jalapeno salsa", "Plain"]);
+    expect(await titlesOf(db, await findEntryIdsByTitle(db, feedId, "jalapeno"))).toEqual([
+      "Jalapeno salsa",
+      "Jalapeño poppers",
+    ]);
+    expect(await titlesOf(db, await findEntryIdsByTitle(db, feedId, "JALAPEÑO"))).toEqual([
+      "Jalapeno salsa",
+      "Jalapeño poppers",
+    ]);
   });
 
   it("matches accented titles regardless of case", async () => {

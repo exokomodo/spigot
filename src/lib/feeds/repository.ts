@@ -455,21 +455,50 @@ export async function findFeedWithEntries(
 }
 
 /**
- * Folds a title or a search for comparison: Unicode case-insensitive, and
- * indifferent to whether an accent was stored as one code point or two.
+ * Latin letters that are their own code point rather than a base letter plus
+ * an accent, so stripping marks leaves them alone. Each maps to what someone
+ * typing on a plain keyboard would write instead.
+ */
+const LATIN_LETTER_FOLDS: Readonly<Record<string, string>> = {
+  æ: "ae",
+  œ: "oe",
+  ø: "o",
+  ł: "l",
+  đ: "d",
+  ð: "d",
+  þ: "th",
+  ß: "ss",
+  ı: "i",
+};
+
+/**
+ * Folds a title or a search for comparison, so that case and accents on Latin
+ * letters do not matter: "JALAPEÑO", "jalapeño" and "jalapeno" all fold to the
+ * same text, in either direction.
+ *
+ * Decomposing to NFD splits "ñ" into "n" plus a combining tilde, and the tilde
+ * is dropped. Only marks on Latin letters go: in scripts like Devanagari or
+ * Japanese a mark changes which letter it is, and stripping it would match
+ * words that have nothing to do with the search.
  *
  * `toLowerCase` rather than `toLocaleLowerCase`, so the result does not change
  * with the server's locale (a Turkish locale lowercases `I` differently).
  */
 export function foldForSearch(text: string): string {
-  return text.normalize("NFC").toLowerCase();
+  return text
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/(\p{Script=Latin})\p{M}+/gu, "$1")
+    .replace(/[æœøłđðþßı]/g, (letter) => LATIN_LETTER_FOLDS[letter] ?? letter)
+    .normalize("NFC");
 }
 
 /**
  * Ids of a feed's entries whose title contains `query`, newest first.
  *
  * The match runs here rather than in SQL because SQLite's `LIKE` and `lower()`
- * only fold ASCII, so `über` would miss "Über". Only `id` and `title` are read,
+ * only fold ASCII case and know nothing of accents, so `uber` would miss
+ * "Über". {@link foldForSearch} handles both. Only `id` and `title` are read,
  * which keeps the scan cheap; the page's full rows are loaded afterwards by id.
  */
 export async function findEntryIdsByTitle(
