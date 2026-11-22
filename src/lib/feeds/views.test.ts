@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { EntryRow, FeedRow, FeedSummaryRow } from "./repository.js";
 import {
+  feedPageUrl,
   formatPublishedAt,
   renderEntryEditForm,
+  renderEntryPager,
   renderEntryRow,
   renderFeedPage,
   renderFeedRow,
@@ -171,6 +173,61 @@ describe("renderFeedPage", () => {
 
   it("omits the site link entirely when the feed has none", () => {
     expect(renderFeedPage(feed, [])).not.toContain(">Site<");
+  });
+
+  it("counts every entry in the feed, not just the ones on this page", () => {
+    const html = renderFeedPage(feed, [entry()], { page: 2, pageCount: 3, totalEntries: 120 });
+    expect(html).toMatch(/<span id="entry-count"\s*>120 entries<\/span>/);
+  });
+
+  it("links the neighbouring pages when there is more than one", () => {
+    const html = renderFeedPage(feed, [entry()], { page: 2, pageCount: 3, totalEntries: 120 });
+    expect(html).toContain('href="/feeds/tech" rel="prev"');
+    expect(html).toContain('href="/feeds/tech?page=3" rel="next"');
+    expect(html).toContain("Page 2 of 3");
+  });
+
+  it("shows no pager when every entry fits on one page", () => {
+    const html = renderFeedPage(feed, [entry()]);
+    expect(html).toMatch(/<nav id="entry-pager"[^>]*>\s*<\/nav>/);
+    expect(html).not.toContain("Page 1 of 1");
+  });
+});
+
+describe("feedPageUrl", () => {
+  it("leaves the first page as the bare feed address", () => {
+    expect(feedPageUrl("tech", 1)).toBe("/feeds/tech");
+  });
+
+  it("adds the page to any later one", () => {
+    expect(feedPageUrl("tech", 4)).toBe("/feeds/tech?page=4");
+  });
+});
+
+describe("renderEntryPager", () => {
+  it("offers no newer link on the first page", () => {
+    const html = renderEntryPager("tech", { page: 1, pageCount: 3, totalEntries: 120 }).html;
+    expect(html).not.toContain('rel="prev"');
+    expect(html).toContain('href="/feeds/tech?page=2" rel="next"');
+  });
+
+  it("offers no older link on the last page", () => {
+    const html = renderEntryPager("tech", { page: 3, pageCount: 3, totalEntries: 120 }).html;
+    expect(html).toContain('href="/feeds/tech?page=2" rel="prev"');
+    expect(html).not.toContain('rel="next"');
+  });
+
+  it("marks itself for an out-of-band swap only when asked", () => {
+    const paging = { page: 1, pageCount: 2, totalEntries: 60 };
+    expect(renderEntryPager("tech", paging).html).not.toContain("hx-swap-oob");
+    expect(renderEntryPager("tech", paging, true).html).toContain('hx-swap-oob="outerHTML"');
+  });
+
+  it("still renders an empty element to swap when there is one page", () => {
+    const html = renderEntryPager("tech", { page: 1, pageCount: 1, totalEntries: 3 }, true).html;
+    expect(html).toContain('id="entry-pager"');
+    expect(html).toContain('hx-swap-oob="outerHTML"');
+    expect(html).not.toContain("<a ");
   });
 });
 

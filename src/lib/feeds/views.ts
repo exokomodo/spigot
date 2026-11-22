@@ -238,8 +238,78 @@ function renderSiteLink(feed: FeedRow): SafeHtml {
   return safe(render("feed-site-link", { link: renderLink(feed.link, "Site") }));
 }
 
-/** The browsable page for one feed. */
-export function renderFeedPage(feed: FeedRow, entries: readonly EntryRow[]): string {
+/** Where a reader is in a feed's entries, as far as the page needs to know. */
+export interface EntryPaging {
+  readonly page: number;
+  readonly pageCount: number;
+  readonly totalEntries: number;
+}
+
+/* Fixed markup, so the arrows can be entities like the rest of the templates. */
+const NEWER_LABEL = safe("&larr; Newer");
+const OLDER_LABEL = safe("Older &rarr;");
+
+/** The address of one page of a feed; page 1 is the bare feed page. */
+export function feedPageUrl(slug: string, page: number): string {
+  const base = feedPagePath(slug);
+  return page <= 1 ? base : `${base}?page=${String(page)}`;
+}
+
+/**
+ * The attribute that lets a fragment response replace an element elsewhere on
+ * the page. Built here rather than in the template so the full page and the
+ * fragments can share one template.
+ */
+function oobAttribute(outOfBand: boolean): SafeHtml {
+  return safe(outOfBand ? 'hx-swap-oob="outerHTML"' : "");
+}
+
+/**
+ * Newer and older links around a "Page N of M" status, or nothing at all when
+ * everything fits on one page.
+ *
+ * The element is still rendered when empty so a fragment response always has
+ * something to swap: a delete that brings a feed down to one page has to be
+ * able to remove the pager it no longer needs.
+ */
+export function renderEntryPager(slug: string, paging: EntryPaging, outOfBand = false): SafeHtml {
+  const oob = oobAttribute(outOfBand);
+  if (paging.pageCount <= 1) {
+    return safe(render("entry-pager-empty", { oob }));
+  }
+  const link = (page: number, rel: string, text: SafeHtml): SafeHtml =>
+    safe(render("entry-pager-link", { href: feedPageUrl(slug, page), rel, text }));
+  const gap = (text: SafeHtml): SafeHtml => safe(render("entry-pager-gap", { text }));
+  return safe(
+    render("entry-pager", {
+      oob,
+      page: paging.page,
+      pageCount: paging.pageCount,
+      newer: paging.page > 1 ? link(paging.page - 1, "prev", NEWER_LABEL) : gap(NEWER_LABEL),
+      older:
+        paging.page < paging.pageCount
+          ? link(paging.page + 1, "next", OLDER_LABEL)
+          : gap(OLDER_LABEL),
+    })
+  );
+}
+
+/** The feed's total entry count, which the fragments refresh after a change. */
+export function renderEntryCount(totalEntries: number, outOfBand = false): SafeHtml {
+  return safe(render("entry-count", { oob: oobAttribute(outOfBand), count: totalEntries }));
+}
+
+/**
+ * The browsable page for one feed.
+ *
+ * `paging` defaults to a single page holding exactly `entries`, which is what a
+ * caller that never asked for paging has.
+ */
+export function renderFeedPage(
+  feed: FeedRow,
+  entries: readonly EntryRow[],
+  paging: EntryPaging = { page: 1, pageCount: 1, totalEntries: entries.length }
+): string {
   return render("feed", {
     title: feed.title,
     description: feed.description,
@@ -247,9 +317,10 @@ export function renderFeedPage(feed: FeedRow, entries: readonly EntryRow[]): str
     feedUrl: feedPath(feed.slug),
     rssButton: renderCopyRssButton(feed.slug, feed.title),
     createPath: `${feedPagePath(feed.slug)}/entries`,
-    entryCount: entries.length,
+    entryCount: renderEntryCount(paging.totalEntries),
     siteLink: renderSiteLink(feed),
     entries: renderEntryRows(feed.slug, entries),
+    pager: renderEntryPager(feed.slug, paging),
     icons: icons(),
     styles: styles(),
     copyScript: copyScript(),

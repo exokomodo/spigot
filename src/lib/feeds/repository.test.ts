@@ -3,9 +3,11 @@ import { afterEach, describe, expect, it } from "vitest";
 import Database, { loadDatabase } from "../database.js";
 import {
   DEFAULT_ENTRY_LIMIT,
+  countEntriesByFeedId,
   deleteFeedBySlug,
   findEntriesByFeedId,
   findFeedBySlug,
+  findFeedPage,
   findFeedWithEntries,
 } from "./repository.js";
 
@@ -114,6 +116,16 @@ describe("findEntriesByFeedId", () => {
     expect(entries.map((entry) => entry.guid)).toEqual(["c", "b"]);
   });
 
+  it("skips the given offset, keeping the newest-first order", async () => {
+    const db = await openMigrated();
+    const feedId = await insertFeed(db, "tech");
+    await insertEntry(db, feedId, "a", "2026-01-01T00:00:00.000Z");
+    await insertEntry(db, feedId, "b", "2026-02-01T00:00:00.000Z");
+    await insertEntry(db, feedId, "c", "2026-03-01T00:00:00.000Z");
+    const entries = await findEntriesByFeedId(db, feedId, 2, 2);
+    expect(entries.map((entry) => entry.guid)).toEqual(["a"]);
+  });
+
   it("caps at the default limit", async () => {
     const db = await openMigrated();
     const feedId = await insertFeed(db, "tech");
@@ -193,5 +205,74 @@ describe("findFeedWithEntries", () => {
   it("returns undefined for an unknown slug", async () => {
     const db = await openMigrated();
     expect(await findFeedWithEntries(db, "nope")).toBeUndefined();
+  });
+});
+
+describe("countEntriesByFeedId", () => {
+  it("counts every entry of the feed and none of another's", async () => {
+    const db = await openMigrated();
+    const tech = await insertFeed(db, "tech");
+    const food = await insertFeed(db, "food");
+    for (let index = 0; index < DEFAULT_ENTRY_LIMIT + 5; index += 1) {
+      await insertEntry(db, tech, `tech-${index}`, "2026-01-01T00:00:00.000Z");
+    }
+    await insertEntry(db, food, "food-1", "2026-01-01T00:00:00.000Z");
+    expect(await countEntriesByFeedId(db, tech)).toBe(DEFAULT_ENTRY_LIMIT + 5);
+    expect(await countEntriesByFeedId(db, food)).toBe(1);
+  });
+});
+
+describe("findFeedPage", () => {
+  /** Five entries dated a day apart, so "e" is newest and "a" oldest. */
+  const seedFive = async (db: Database): Promise<void> => {
+    const feedId = await insertFeed(db, "tech");
+    for (const [index, guid] of ["a", "b", "c", "d", "e"].entries()) {
+      await insertEntry(db, feedId, guid, `2026-01-0${String(index + 1)}T00:00:00.000Z`);
+    }
+  };
+
+  it("serves the requested page and says how many there are", async () => {
+    const db = await openMigrated();
+    await seedFive(db);
+    const loaded = await findFeedPage(db, "tech", 2, 2);
+    expect(loaded?.entries.map((entry) => entry.guid)).toEqual(["c", "b"]);
+    expect(loaded).toMatchObject({ page: 2, pageCount: 3, pageSize: 2, totalEntries: 5 });
+  });
+
+  it("reaches every entry across the pages, each exactly once", async () => {
+    const db = await openMigrated();
+    await seedFive(db);
+    const seen: string[] = [];
+    for (let page = 1; page <= 3; page += 1) {
+      const loaded = await findFeedPage(db, "tech", page, 2);
+      seen.push(...(loaded?.entries.map((entry) => entry.guid) ?? []));
+    }
+    expect(seen).toEqual(["e", "d", "c", "b", "a"]);
+  });
+
+  it("clamps a page past the end to the last page", async () => {
+    const db = await openMigrated();
+    await seedFive(db);
+    const loaded = await findFeedPage(db, "tech", 99, 2);
+    expect(loaded?.page).toBe(3);
+    expect(loaded?.entries.map((entry) => entry.guid)).toEqual(["a"]);
+  });
+
+  it("clamps a page below 1 to the first page", async () => {
+    const db = await openMigrated();
+    await seedFive(db);
+    expect((await findFeedPage(db, "tech", 0, 2))?.page).toBe(1);
+  });
+
+  it("gives an empty feed one empty page", async () => {
+    const db = await openMigrated();
+    await insertFeed(db, "tech");
+    const loaded = await findFeedPage(db, "tech", 1);
+    expect(loaded).toMatchObject({ page: 1, pageCount: 1, totalEntries: 0, entries: [] });
+  });
+
+  it("returns undefined for an unknown slug", async () => {
+    const db = await openMigrated();
+    expect(await findFeedPage(db, "nope", 1)).toBeUndefined();
   });
 });

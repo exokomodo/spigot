@@ -9,11 +9,13 @@ import {
   findEntryFromRequest,
   updateEntryFromRequest,
 } from "../lib/feeds/entry-service.js";
-import { findFeedWithEntries, toRssFeed } from "../lib/feeds/index.js";
+import { findFeedPage, findFeedWithEntries, toRssFeed } from "../lib/feeds/index.js";
 import { ValidationError } from "../lib/feeds/service.js";
 import { render } from "../lib/html/template.js";
 import {
+  renderEntryCount,
   renderEntryEditForm,
+  renderEntryPager,
   renderEntryRow,
   renderEntryRows,
   renderFeedPage,
@@ -56,12 +58,65 @@ export async function feedChannel(req: Request<Dependencies>): Promise<RssChanne
   });
 }
 
-/** The browsable page for one feed. */
+/**
+ * Reads a 1-based page number, treating anything that is not a positive whole
+ * number as the first page.
+ *
+ * Lenient on purpose: the value comes from a link or a hand-edited address bar,
+ * and a reader who typed `?page=abc` is better served by the newest entries
+ * than by an error page. An oversized number is clamped by the repository.
+ */
+export function parsePage(value: unknown): number {
+  if (typeof value !== "string" || !/^\d{1,9}$/.test(value)) {
+    return 1;
+  }
+  return Math.max(1, Number.parseInt(value, 10));
+}
+
+/**
+ * The page the reader is looking at when an htmx request comes in.
+ *
+ * htmx sends the page's address in `HX-Current-URL`, so a create or delete on
+ * page 3 can answer with page 3 rather than throwing the reader back to page 1.
+ * A request without it (a script, a test) gets the first page.
+ */
+function currentPage(req: Request<Dependencies>): number {
+  const header = req.get("HX-Current-URL");
+  if (header === undefined) {
+    return 1;
+  }
+  try {
+    return parsePage(new URL(header, "http://localhost").searchParams.get("page") ?? undefined);
+  } catch {
+    return 1;
+  }
+}
+
+/**
+ * The refreshed entry list for a fragment response, along with the pager and
+ * count elsewhere on the page, which change whenever an entry comes or goes.
+ */
+async function renderEntryListFragment(req: Request<Dependencies>, slug: string): Promise<string> {
+  const loaded = await findFeedPage(req.deps.db, slug, currentPage(req));
+  if (loaded === undefined) {
+    return renderEntryRows(slug, []).html;
+  }
+  return [
+    renderEntryRows(slug, loaded.entries).html,
+    renderEntryPager(slug, loaded, true).html,
+    renderEntryCount(loaded.totalEntries, true).html,
+  ].join("\n");
+}
+
+/** The browsable page for one feed, one page of entries at a time. */
 export function feedPageHandler(req: Request<Dependencies>, res: express.Response): void {
   void (async () => {
     const slug = pathParam(req.params.slug);
     try {
-      const loaded = slug === undefined ? undefined : await findFeedWithEntries(req.deps.db, slug);
+      const loaded =
+        slug === undefined
+          ? undefined
+          : await findFeedPage(req.deps.db, slug, parsePage(req.query.page));
       if (loaded === undefined) {
         res
           .status(404)
@@ -69,7 +124,9 @@ export function feedPageHandler(req: Request<Dependencies>, res: express.Respons
           .send(renderNotFoundPage("That feed does not exist."));
         return;
       }
-      res.set("Content-Type", HTML_CONTENT_TYPE).send(renderFeedPage(loaded.feed, loaded.entries));
+      res
+        .set("Content-Type", HTML_CONTENT_TYPE)
+        .send(renderFeedPage(loaded.feed, loaded.entries, loaded));
     } catch (error) {
       console.error(`Failed to render the page for feed "${String(slug)}"`, error);
       res.status(500).set("Content-Type", HTML_CONTENT_TYPE).send("<h1>Something went wrong</h1>");
@@ -166,12 +223,10 @@ export function createEntryFragmentHandler(
     }
     try {
       await createEntryFromRequest(req.deps.db, slug, req.body);
-      const loaded = await findFeedWithEntries(req.deps.db, slug);
-      const entries = loaded?.entries ?? [];
       res
         .status(201)
         .set("Content-Type", HTML_CONTENT_TYPE)
-        .send(`${renderEntryRows(slug, entries).html}\n${render("errors-cleared", {})}`);
+        .send(`${await renderEntryListFragment(req, slug)}\n${render("errors-cleared", {})}`);
     } catch (error) {
       sendFragmentError(
         res,
@@ -197,12 +252,9 @@ export function deleteEntryFragmentHandler(
     const { slug, entryId } = target;
     try {
       await deleteEntryFromRequest(req.deps.db, slug, entryId);
-      const loaded = await findFeedWithEntries(req.deps.db, slug);
       res
         .set("Content-Type", HTML_CONTENT_TYPE)
-        .send(
-          `${renderEntryRows(slug, loaded?.entries ?? []).html}\n${render("errors-cleared", {})}`
-        );
+        .send(`${await renderEntryListFragment(req, slug)}\n${render("errors-cleared", {})}`);
     } catch (error) {
       sendFragmentError(
         res,
